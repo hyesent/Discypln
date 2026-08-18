@@ -3,6 +3,7 @@
 //  ALL UPGRADES: Task Completion Chart (Bar),
 //  Category Breakdown (Donut), Productivity Heatmap,
 //  Estimated vs Actual Time, Labels (Multiple Tags)
+//  AUTO-RESET: Daily tasks reset at midnight, weekly after 7 days
 // ============================================================
 
 import { useState, useMemo, useEffect, useRef } from 'react'
@@ -118,6 +119,13 @@ const IconChart = ({ size = 18 }) => (
   </svg>
 )
 
+const IconRefresh = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 4 23 10 17 10" />
+    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+  </svg>
+)
+
 // ============================================================
 //  TASKS TAB COMPONENT (Self-Contained)
 // ============================================================
@@ -140,7 +148,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   const [taskDifficulty, setTaskDifficulty] = useState('medium')
   const [taskMinutes, setTaskMinutes] = useState(30)
   const [taskTag, setTaskTag] = useState('general')
-  const [taskLabels, setTaskLabels] = useState('') // NEW: multiple labels
+  const [taskLabels, setTaskLabels] = useState('')
   const [taskSaving, setTaskSaving] = useState(false)
 
   // UI
@@ -157,7 +165,14 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   const [showCharts, setShowCharts] = useState(true)
 
   // ============================================================
-  //  POMODORO STATE (Self-Contained)
+  //  AUTO-RESET STATE
+  // ============================================================
+
+  const [lastResetDate, setLastResetDate] = useState(null)
+  const [resetHistory, setResetHistory] = useState([])
+
+  // ============================================================
+  //  POMODORO STATE
   // ============================================================
 
   const [pomodoroTime, setPomodoroTime] = useState(25 * 60)
@@ -171,7 +186,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   const [breakDuration, setBreakDuration] = useState(5)
 
   // ============================================================
-  //  SESSION TIMER STATE (Self-Contained)
+  //  SESSION TIMER STATE
   // ============================================================
 
   const [activeSession, setActiveSession] = useState(null)
@@ -241,6 +256,165 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   }
 
   // ============================================================
+  //  AUTO-RESET FUNCTIONS
+  // ============================================================
+
+  const getWeekNumber = (date) => {
+    const d = new Date(date)
+    const startOfYear = new Date(d.getFullYear(), 0, 1)
+    const diff = (d - startOfYear + (startOfYear.getTimezoneOffset() - d.getTimezoneOffset()) * 60000) / 86400000
+    return Math.ceil((diff + startOfYear.getDay() + 1) / 7)
+  }
+
+  const getWeekStartDate = (date) => {
+    const d = new Date(date)
+    const day = d.getDay()
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+    d.setDate(diff)
+    d.setHours(0, 0, 0, 0)
+    return d
+  }
+
+  const getWeekKey = (date) => {
+    const d = new Date(date)
+    const weekStart = getWeekStartDate(d)
+    return `${weekStart.getFullYear()}-W${String(getWeekNumber(weekStart)).padStart(2, '0')}`
+  }
+
+  const shouldResetDaily = (task) => {
+    if (task.type !== 'habit' || task.category !== 'daily') return false
+    
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    
+    const taskDate = new Date(task.due_date || task.created_at)
+    taskDate.setHours(0, 0, 0, 0)
+    
+    // Reset if task is from a previous day and is marked done
+    return task.done && taskDate < today
+  }
+
+  const shouldResetWeekly = (task) => {
+    if (task.type !== 'habit' || task.category !== 'weekly') return false
+    
+    const today = new Date()
+    const currentWeekKey = getWeekKey(today)
+    const taskWeekKey = getWeekKey(new Date(task.due_date || task.created_at))
+    
+    // Reset if task is from a previous week and is marked done
+    return task.done && currentWeekKey !== taskWeekKey
+  }
+
+  const performAutoReset = async () => {
+    if (!supabase || !user) return
+
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const todayStr = today.toISOString().split('T')[0]
+
+    // Check if reset already happened today
+    if (lastResetDate === todayStr) return
+
+    try {
+      const tasksToReset = tasks.filter(t => 
+        (shouldResetDaily(t) || shouldResetWeekly(t)) && t.done
+      )
+
+      if (tasksToReset.length === 0) {
+        setLastResetDate(todayStr)
+        return
+      }
+
+      // For each task that needs reset, create a new instance
+      for (const task of tasksToReset) {
+        // Get the current task to copy its properties
+        const { data: currentTask, error: fetchError } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('id', task.id)
+          .single()
+
+        if (fetchError || !currentTask) continue
+
+        // Calculate new due date
+        let newDueDate = todayStr
+        if (currentTask.category === 'weekly') {
+          // For weekly tasks, set to next occurrence of the weekday
+          const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+          const targetDay = days.indexOf(currentTask.weekday || 'monday')
+          const currentDay = today.getDay()
+          let diff = targetDay - currentDay
+          if (diff <= 0) diff += 7
+          const nextDate = new Date(today)
+          nextDate.setDate(today.getDate() + diff)
+          newDueDate = nextDate.toISOString().split('T')[0]
+        }
+
+        // Mark old task as archived/reset
+        const { error: updateError } = await supabase
+          .from('tasks')
+          .update({
+            done: false,
+            reset_at: new Date().toISOString(),
+            reset_count: (currentTask.reset_count || 0) + 1,
+            previous_due_date: currentTask.due_date,
+            due_date: newDueDate,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', task.id)
+
+        if (updateError) {
+          console.error('Error resetting task:', updateError)
+        }
+      }
+
+      // Track reset history
+      const resetEntry = {
+        date: todayStr,
+        tasksReset: tasksToReset.length,
+        taskIds: tasksToReset.map(t => t.id)
+      }
+      setResetHistory(prev => [...prev, resetEntry])
+      
+      setLastResetDate(todayStr)
+      
+      if (tasksToReset.length > 0) {
+        showToast(`🔄 Auto-reset: ${tasksToReset.length} ${tasksToReset.length === 1 ? 'task' : 'tasks'} reset for a new ${tasksToReset.some(t => t.category === 'weekly') ? 'week' : 'day'}!`, 'info')
+      }
+      
+      // Refresh tasks
+      await fetchTasks()
+    } catch (error) {
+      console.error('Auto-reset error:', error)
+    }
+  }
+
+  // ============================================================
+  //  CHECK FOR AUTO-RESET ON MOUNT AND PERIODICALLY
+  // ============================================================
+
+  useEffect(() => {
+    // Check for reset on component mount
+    if (tasks.length > 0) {
+      performAutoReset()
+    }
+
+    // Set up interval to check every minute for midnight or week change
+    const interval = setInterval(() => {
+      const now = new Date()
+      const minutes = now.getMinutes()
+      const hours = now.getHours()
+      
+      // Check at midnight (00:00) and at the start of each hour
+      if (minutes === 0 && (hours === 0 || hours === 1)) {
+        performAutoReset()
+      }
+    }, 60000) // Check every minute
+
+    return () => clearInterval(interval)
+  }, [tasks])
+
+  // ============================================================
   //  FETCH TASKS
   // ============================================================
 
@@ -258,6 +432,11 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
         const subtaskMap = {}
         data?.forEach((t) => { subtaskMap[t.id] = t.subtasks || [] })
         setSubTasks(subtaskMap)
+        
+        // Check for reset after fetching
+        if (data && data.length > 0) {
+          performAutoReset()
+        }
       }
     } catch (e) {
       console.error('Fetch tasks error:', e)
@@ -438,9 +617,57 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
     const task = tasks.find((t) => t.id === id)
     if (!task) return
     if (!supabase) return
+    
+    // Check if this is a habit task that should auto-reset
+    const isHabit = task.type === 'habit'
+    const now = new Date()
+    const taskDate = new Date(task.due_date || task.created_at)
+    
+    // For habits, check if they should be reset before toggling
+    let shouldReset = false
+    if (isHabit && !task.done) {
+      if (task.category === 'daily') {
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        taskDate.setHours(0, 0, 0, 0)
+        shouldReset = taskDate < today
+      } else if (task.category === 'weekly') {
+        const currentWeekKey = getWeekKey(now)
+        const taskWeekKey = getWeekKey(taskDate)
+        shouldReset = currentWeekKey !== taskWeekKey
+      }
+    }
+    
+    if (shouldReset) {
+      // Reset the task instead of just toggling
+      const newDueDate = task.category === 'weekly' 
+        ? getNextWeekday(now, task.weekday || 'monday')
+        : now.toISOString().split('T')[0]
+      
+      const { error } = await supabase
+        .from('tasks')
+        .update({
+          done: false,
+          reset_at: now.toISOString(),
+          reset_count: (task.reset_count || 0) + 1,
+          previous_due_date: task.due_date,
+          due_date: newDueDate,
+          updated_at: now.toISOString()
+        })
+        .eq('id', id)
+        .eq('user_id', user.id)
+      
+      if (!error) {
+        showToast(`🔄 Task reset for ${task.category === 'weekly' ? 'this week' : 'today'}`, 'info')
+        fetchTasks()
+      }
+      return
+    }
+    
+    // Regular toggle
     const { error } = await supabase
       .from('tasks')
-      .update({ done: !task.done, updated_at: new Date().toISOString() })
+      .update({ done: !task.done, updated_at: now.toISOString() })
       .eq('id', id)
       .eq('user_id', user.id)
     if (!error) {
@@ -452,6 +679,17 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
       }
       fetchTasks()
     }
+  }
+
+  const getNextWeekday = (date, weekday) => {
+    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+    const targetDay = days.indexOf(weekday)
+    const currentDay = date.getDay()
+    let diff = targetDay - currentDay
+    if (diff <= 0) diff += 7
+    const nextDate = new Date(date)
+    nextDate.setDate(date.getDate() + diff)
+    return nextDate.toISOString().split('T')[0]
   }
 
   async function addTask() {
@@ -500,9 +738,11 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
       difficulty: taskDifficulty,
       estimated_minutes: taskMinutes,
       category_tag: taskTag,
-      labels: labelsArray, // NEW: multiple labels
+      labels: labelsArray,
       done: false,
-      subtasks: subtasksArray
+      subtasks: subtasksArray,
+      reset_count: 0,
+      created_at: new Date().toISOString()
     })
 
     if (error) {
@@ -689,7 +929,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
       return { labels: ['No Data'], datasets: [] }
     }
 
-    // Group by day (last 7 days)
     const now = new Date()
     const days = []
     const estimated = []
@@ -707,8 +946,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
       })
 
       const est = dayTasks.reduce((sum, t) => sum + t.estimated_minutes, 0)
-      // For actual, we use estimated as a baseline since we don't track actual time
-      // In a real app, you'd track actual completion time
       const act = dayTasks.reduce((sum, t) => sum + Math.round(t.estimated_minutes * 0.9), 0)
 
       days.push(dayLabel)
@@ -772,6 +1009,47 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
     <div style={{ width: '100%', maxWidth: '100%' }}>
       <div className="section-title">Task List</div>
       <div className="section-subtitle">Organize your day, track your focus, and build discipline.</div>
+
+      {/* ===== AUTO-RESET STATUS BAR ===== */}
+      <div
+        className="card"
+        style={{
+          marginBottom: '16px',
+          padding: '10px 16px',
+          borderColor: 'rgba(79, 140, 255, 0.15)',
+          background: 'rgba(79, 140, 255, 0.04)'
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <IconRefresh size={16} color="var(--brand-blue)" />
+            <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)' }}>
+              Auto-Reset
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>
+            <span>
+              Daily: <strong style={{ color: 'var(--text-primary)' }}>
+                {tasks.filter(t => t.category === 'daily' && t.type === 'habit').length} tasks
+              </strong>
+              <span style={{ fontSize: '10px', marginLeft: '4px' }}>↻ midnight</span>
+            </span>
+            <span>
+              Weekly: <strong style={{ color: 'var(--text-primary)' }}>
+                {tasks.filter(t => t.category === 'weekly' && t.type === 'habit').length} tasks
+              </strong>
+              <span style={{ fontSize: '10px', marginLeft: '4px' }}>↻ every 7 days</span>
+            </span>
+            {resetHistory.length > 0 && (
+              <span>
+                Last reset: <strong style={{ color: 'var(--text-primary)' }}>
+                  {resetHistory[resetHistory.length - 1].tasksReset} tasks
+                </strong>
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* ===== CHARTS SECTION ===== */}
       {hasChartData && (
@@ -1502,6 +1780,12 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
             const isActiveSession = activeSession === t.id
             const sessionTimeRemaining = isActiveSession ? formatTime(sessionPomodoroTime) : null
             const taskLabels = t.labels || []
+            
+            // Check if task needs reset
+            const needsReset = t.type === 'habit' && t.done && (
+              (t.category === 'daily' && new Date(t.due_date) < new Date(new Date().setHours(0, 0, 0, 0))) ||
+              (t.category === 'weekly' && getWeekKey(new Date()) !== getWeekKey(new Date(t.due_date)))
+            )
 
             return (
               <div
@@ -1514,11 +1798,17 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
                     ? '2px solid var(--brand-blue)'
                     : isExpanded
                       ? '1px solid var(--brand-blue)'
-                      : '1px solid var(--glass-border)',
+                      : needsReset
+                        ? '1px solid rgba(251, 191, 36, 0.3)'
+                        : '1px solid var(--glass-border)',
                   transition: 'all 0.2s ease',
                   animation: `slideUp 0.4s var(--spring) both`,
                   animationDelay: `${index * 30}ms`,
-                  background: isActiveSession ? 'rgba(79, 140, 255, 0.06)' : 'var(--glass-bg)'
+                  background: isActiveSession 
+                    ? 'rgba(79, 140, 255, 0.06)' 
+                    : needsReset 
+                      ? 'rgba(251, 191, 36, 0.04)'
+                      : 'var(--glass-bg)'
                 }}
               >
                 <div
@@ -1555,6 +1845,22 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
                       }}
                     >
                       {t.content}
+                      {needsReset && (
+                        <span style={{
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          color: '#F59E0B',
+                          background: 'rgba(245, 158, 11, 0.12)',
+                          padding: '2px 8px',
+                          borderRadius: '999px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}>
+                          <IconRefresh size={12} />
+                          Needs Reset
+                        </span>
+                      )}
                       {isActiveSession && (
                         <span style={{
                           fontSize: '11px',
@@ -1576,6 +1882,17 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
                             animation: sessionRunning ? 'pulse 1s ease-in-out infinite' : 'none'
                           }} />
                           {sessionRunning ? 'LIVE' : 'PAUSED'} • {sessionTimeRemaining}
+                        </span>
+                      )}
+                      {t.reset_count > 0 && (
+                        <span style={{
+                          fontSize: '10px',
+                          color: 'var(--text-muted)',
+                          background: 'rgba(107, 114, 128, 0.1)',
+                          padding: '1px 6px',
+                          borderRadius: '4px'
+                        }}>
+                          ↻{t.reset_count}
                         </span>
                       )}
                     </div>
