@@ -350,7 +350,7 @@ export default function Dashboard({ user, supabase, onNavigate, onOpenStats }) {
 
   return (
     <>
-      {/* ===== HERO CARD ===== */}
+      {/* ===== GREETING & STATS CARD ===== */}
       <div className="stats-hero" style={{ marginBottom: '24px' }}>
         <div style={{
           display: 'flex',
