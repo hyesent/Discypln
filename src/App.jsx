@@ -769,86 +769,190 @@ export default function App() {
               <IconMenuDots />
             </button>
             {showUserMenu && (
-              <div className="glass glass-heavy user-menu">
-                <div className="user-email">{user?.email}</div>
+              <div className="glass glass-heavy" style={{
+                position: 'absolute',
+                top: 'calc(100% + 8px)',
+                right: 0,
+                minWidth: '260px',
+                maxWidth: '320px',
+                borderRadius: 'var(--radius-lg)',
+                padding: '8px',
+                zIndex: 9999,
+                animation: 'slideDown 0.2s ease',
+                background: 'var(--bg-secondary)',
+                backdropFilter: 'blur(24px) saturate(180%)',
+                WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+                border: '1px solid var(--glass-border)',
+                boxShadow: '0 16px 48px rgba(0,0,0,0.4)',
+                maxHeight: '90vh',
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'stretch'
+              }}>
+                <div style={{ 
+                  padding: '10px 14px', 
+                  fontSize: '13px', 
+                  color: 'var(--text-secondary)', 
+                  borderBottom: '1px solid var(--glass-border)', 
+                  marginBottom: '4px',
+                  wordBreak: 'break-all'
+                }}>
+                  {user?.email}
+                </div>
 
-                <button onClick={() => { setCurrentView('dashboard'); setShowUserMenu(false) }} className="btn btn-ghost">
-                  <IconBack /> Dashboard
+                <button 
+                  onClick={() => { setCurrentView('dashboard'); setShowUserMenu(false) }}
+                  className="btn btn-ghost" 
+                  style={{ 
+                    width: '100%', 
+                    justifyContent: 'flex-start', 
+                    gap: '10px', 
+                    padding: '10px 14px',
+                    fontSize: '14px'
+                  }}>
+                  <IconBack size={18} /> Dashboard
                 </button>
 
-                <button onClick={() => {
-                  const themes = ['dark', 'light', 'amber', 'solarized']
-                  const currentIndex = themes.indexOf(themeMode)
-                  const nextIndex = (currentIndex + 1) % themes.length
-                  setThemeMode(themes[nextIndex])
-                  setShowUserMenu(false)
-                }} className="btn btn-ghost">
+                <button 
+                  onClick={() => {
+                    const themes = ['dark', 'light', 'amber', 'solarized']
+                    const currentIndex = themes.indexOf(themeMode)
+                    const nextIndex = (currentIndex + 1) % themes.length
+                    setThemeMode(themes[nextIndex])
+                    setShowUserMenu(false)
+                  }} 
+                  className="btn btn-ghost" 
+                  style={{ 
+                    width: '100%', 
+                    justifyContent: 'flex-start', 
+                    gap: '10px', 
+                    padding: '10px 14px',
+                    fontSize: '14px'
+                  }}>
                   {getThemeIcon()} {getThemeName()}
                 </button>
 
-                <button onClick={() => setShowTrashModal(true)} className="btn btn-ghost">
-                  <IconTrash /> Trash ({trash.notes.length + trash.tasks.length + trash.journal.length})
+                <button 
+                  onClick={() => setShowTrashModal(true)} 
+                  className="btn btn-ghost" 
+                  style={{ 
+                    width: '100%', 
+                    justifyContent: 'flex-start', 
+                    gap: '10px', 
+                    padding: '10px 14px',
+                    fontSize: '14px'
+                  }}>
+                  <IconTrash size={18} /> Trash ({trash.notes.length + trash.tasks.length + trash.journal.length})
                 </button>
 
-                <div className="menu-divider">
-                  <div className="tiny-label">
-                    <IconFolder size={14} /> Local Files
+                <div style={{
+                  padding: '8px 8px 4px 8px',
+                  marginTop: '4px',
+                  borderTop: '1px solid var(--glass-border)'
+                }}>
+                  <div className="tiny-label" style={{ 
+                    padding: '4px 6px', 
+                    color: 'var(--text-muted)',
+                    fontSize: '10px',
+                    letterSpacing: '0.06em'
+                  }}>
+                    <IconFolder size={14} style={{ marginRight: '4px' }} /> LOCAL FILES
                   </div>
                   
-                  <button onClick={async () => {
-                    try {
-                      const { getAllFiles } = await import('./lib')
-                      const files = await getAllFiles()
-                      if (files.length === 0) {
-                        showToast('No local files to export', 'info')
-                        return
+                  <button
+                    onClick={async () => {
+                      try {
+                        const { getAllFiles } = await import('./lib')
+                        const files = await getAllFiles()
+                        if (files.length === 0) {
+                          showToast('No local files to export', 'info')
+                          return
+                        }
+                        const fileList = files.map(f => ({
+                          id: f.id,
+                          name: f.name,
+                          type: f.type,
+                          size: f.size,
+                          createdAt: f.createdAt
+                        }))
+                        const blob = new Blob([JSON.stringify(fileList, null, 2)], { type: 'application/json' })
+                        const url = URL.createObjectURL(blob)
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = `local-files-${Date.now()}.json`
+                        a.click()
+                        URL.revokeObjectURL(url)
+                        showToast(`Exported ${files.length} file references`, 'success')
+                        setShowUserMenu(false)
+                      } catch (err) {
+                        showToast('Export failed: ' + err.message, 'error')
                       }
-                      const fileList = files.map(f => ({
-                        id: f.id,
-                        name: f.name,
-                        type: f.type,
-                        size: f.size,
-                        createdAt: f.createdAt
-                      }))
-                      const blob = new Blob([JSON.stringify(fileList, null, 2)], { type: 'application/json' })
-                      const url = URL.createObjectURL(blob)
-                      const a = document.createElement('a')
-                      a.href = url
-                      a.download = `local-files-${Date.now()}.json`
-                      a.click()
-                      URL.revokeObjectURL(url)
-                      showToast(`Exported ${files.length} file references`, 'success')
-                      setShowUserMenu(false)
-                    } catch (err) {
-                      showToast('Export failed: ' + err.message, 'error')
-                    }
-                  }} className="btn btn-ghost">
+                    }}
+                    className="btn btn-ghost"
+                    style={{ 
+                      width: '100%', 
+                      justifyContent: 'flex-start', 
+                      gap: '8px', 
+                      padding: '6px 14px', 
+                      fontSize: '13px'
+                    }}
+                  >
                     <IconExport size={16} /> Export Local Files
                   </button>
                   
-                  <button onClick={() => {
-                    document.getElementById('importLocalFiles').click()
-                    setShowUserMenu(false)
-                  }} className="btn btn-ghost">
+                  <button
+                    onClick={() => {
+                      document.getElementById('importLocalFiles').click()
+                      setShowUserMenu(false)
+                    }}
+                    className="btn btn-ghost"
+                    style={{ 
+                      width: '100%', 
+                      justifyContent: 'flex-start', 
+                      gap: '8px', 
+                      padding: '6px 14px', 
+                      fontSize: '13px'
+                    }}
+                  >
                     <IconImport size={16} /> Import Local Files
                   </button>
                   
-                  <input id="importLocalFiles" type="file" accept=".json" style={{ display: 'none' }} onChange={async (e) => {
-                    const file = e.target.files[0]
-                    if (!file) return
-                    try {
-                      const text = await file.text()
-                      const data = JSON.parse(text)
-                      showToast(`Imported ${data.length} file references`, 'success')
-                    } catch (err) {
-                      showToast('Invalid file format', 'error')
-                    }
-                    e.target.value = ''
-                  }} />
+                  <input
+                    id="importLocalFiles"
+                    type="file"
+                    accept=".json"
+                    style={{ display: 'none' }}
+                    onChange={async (e) => {
+                      const file = e.target.files[0]
+                      if (!file) return
+                      try {
+                        const text = await file.text()
+                        const data = JSON.parse(text)
+                        showToast(`Imported ${data.length} file references`, 'success')
+                      } catch (err) {
+                        showToast('Invalid file format', 'error')
+                      }
+                      e.target.value = ''
+                    }}
+                  />
                 </div>
 
-                <button onClick={() => { signOut(); setShowUserMenu(false) }} className="btn btn-ghost logout-btn">
-                  <IconLogout /> Logout
+                <button 
+                  onClick={() => { signOut(); setShowUserMenu(false) }} 
+                  className="btn btn-ghost" 
+                  style={{
+                    width: '100%', 
+                    justifyContent: 'flex-start', 
+                    gap: '10px', 
+                    color: 'var(--text-muted)',
+                    borderTop: '1px solid var(--glass-border)', 
+                    marginTop: '4px', 
+                    padding: '10px 14px',
+                    fontSize: '14px'
+                  }}
+                >
+                  <IconLogout size={18} /> Logout
                 </button>
               </div>
             )}
