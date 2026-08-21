@@ -750,67 +750,29 @@ export default function App() {
     )
   }
 
-  const greeting = getGreeting()
-
   return (
     <>
       <div className="bg-glow" />
       <div className="container fade-in" style={{ position: 'relative', zIndex: 1 }}>
 
-        {/* ===== HEADER - LOGO + MENU ONLY ===== */}
-        <header className="app-header" style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center',
-          position: 'relative', 
-          zIndex: 100 
-        }}>
+        {/* ===== HEADER - LOGO + MENU ON SAME LINE ===== */}
+        <header className="app-header">
           <div className="header-left">
-            <div className="logo-container" style={{ display: 'flex', alignItems: 'center', gap: '0px' }}>
-              <LogoIcon className="logo-svg" style={{ width: '40px', height: '40px' }} />
-              <span className="logo-text" style={{
-                fontSize: '26px',
-                fontWeight: 900,
-                letterSpacing: '-0.03em',
-                marginLeft: '-4px',
-                background: 'var(--gradient-primary)',
-                backgroundSize: '200% auto',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text',
-                animation: 'gradientShift 15s ease infinite'
-              }}>
-                iscypln
-              </span>
+            <div className="logo-container">
+              <LogoIcon className="logo-svg" />
+              <span className="logo-text">iscypln</span>
             </div>
           </div>
 
-          <div className="header-right" style={{ position: 'relative', zIndex: 1000 }} ref={userMenuRef}>
-            <button onClick={() => setShowUserMenu(!showUserMenu)} className="btn btn-ghost btn-icon" style={{ padding: '0', fontSize: '22px' }}>
+          <div className="header-right" ref={userMenuRef}>
+            <button onClick={() => setShowUserMenu(!showUserMenu)} className="btn btn-ghost btn-icon">
               <IconMenuDots />
             </button>
             {showUserMenu && (
-              <div className="glass glass-heavy" style={{
-                position: 'absolute',
-                top: 'calc(100% + 8px)',
-                right: 0,
-                minWidth: '220px',
-                borderRadius: 'var(--radius-lg)',
-                padding: '8px',
-                zIndex: 9999,
-                animation: 'slideDown 0.2s ease',
-                background: 'var(--bg-secondary)',
-                backdropFilter: 'blur(24px) saturate(180%)',
-                WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-                border: '1px solid var(--glass-border)',
-                boxShadow: '0 16px 48px rgba(0,0,0,0.4)'
-              }}>
-                <div style={{ padding: '10px 14px', fontSize: '13px', color: 'var(--text-secondary)', borderBottom: '1px solid var(--glass-border)', marginBottom: '4px' }}>
-                  {user?.email}
-                </div>
+              <div className="glass glass-heavy user-menu">
+                <div className="user-email">{user?.email}</div>
 
-                <button onClick={() => { setCurrentView('dashboard'); setShowUserMenu(false) }}
-                  className="btn btn-ghost" style={{ width: '100%', justifyContent: 'flex-start', gap: '10px', padding: '10px 14px' }}>
+                <button onClick={() => { setCurrentView('dashboard'); setShowUserMenu(false) }} className="btn btn-ghost">
                   <IconBack /> Dashboard
                 </button>
 
@@ -820,97 +782,72 @@ export default function App() {
                   const nextIndex = (currentIndex + 1) % themes.length
                   setThemeMode(themes[nextIndex])
                   setShowUserMenu(false)
-                }} className="btn btn-ghost" style={{ width: '100%', justifyContent: 'flex-start', gap: '10px', padding: '10px 14px' }}>
+                }} className="btn btn-ghost">
                   {getThemeIcon()} {getThemeName()}
                 </button>
 
-                <button onClick={() => setShowTrashModal(true)} className="btn btn-ghost" style={{ width: '100%', justifyContent: 'flex-start', gap: '10px', padding: '10px 14px' }}>
+                <button onClick={() => setShowTrashModal(true)} className="btn btn-ghost">
                   <IconTrash /> Trash ({trash.notes.length + trash.tasks.length + trash.journal.length})
                 </button>
 
-                {/* ===== LOCAL FILE MANAGEMENT ===== */}
-                <div style={{
-                  padding: '4px 8px',
-                  marginTop: '4px',
-                  borderTop: '1px solid var(--glass-border)'
-                }}>
-                  <div className="tiny-label" style={{ padding: '4px 0', color: 'var(--text-muted)' }}>
-                    <IconFolder size={14} style={{ marginRight: '4px' }} /> Local Files
+                <div className="menu-divider">
+                  <div className="tiny-label">
+                    <IconFolder size={14} /> Local Files
                   </div>
                   
-                  <button
-                    onClick={async () => {
-                      try {
-                        const { getAllFiles, getFileUrl } = await import('./lib')
-                        const files = await getAllFiles()
-                        if (files.length === 0) {
-                          showToast('No local files to export', 'info')
-                          return
-                        }
-                        
-                        const fileList = files.map(f => ({
-                          id: f.id,
-                          name: f.name,
-                          type: f.type,
-                          size: f.size,
-                          createdAt: f.createdAt
-                        }))
-                        
-                        const blob = new Blob([JSON.stringify(fileList, null, 2)], { type: 'application/json' })
-                        const url = URL.createObjectURL(blob)
-                        const a = document.createElement('a')
-                        a.href = url
-                        a.download = `local-files-${Date.now()}.json`
-                        a.click()
-                        URL.revokeObjectURL(url)
-                        showToast(`Exported ${files.length} file references`, 'success')
-                        setShowUserMenu(false)
-                      } catch (err) {
-                        showToast('Export failed: ' + err.message, 'error')
+                  <button onClick={async () => {
+                    try {
+                      const { getAllFiles } = await import('./lib')
+                      const files = await getAllFiles()
+                      if (files.length === 0) {
+                        showToast('No local files to export', 'info')
+                        return
                       }
-                    }}
-                    className="btn btn-ghost"
-                    style={{ width: '100%', justifyContent: 'flex-start', gap: '8px', padding: '6px 14px', fontSize: '13px' }}
-                  >
+                      const fileList = files.map(f => ({
+                        id: f.id,
+                        name: f.name,
+                        type: f.type,
+                        size: f.size,
+                        createdAt: f.createdAt
+                      }))
+                      const blob = new Blob([JSON.stringify(fileList, null, 2)], { type: 'application/json' })
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url
+                      a.download = `local-files-${Date.now()}.json`
+                      a.click()
+                      URL.revokeObjectURL(url)
+                      showToast(`Exported ${files.length} file references`, 'success')
+                      setShowUserMenu(false)
+                    } catch (err) {
+                      showToast('Export failed: ' + err.message, 'error')
+                    }
+                  }} className="btn btn-ghost">
                     <IconExport size={16} /> Export Local Files
                   </button>
                   
-                  <button
-                    onClick={() => {
-                      document.getElementById('importLocalFiles').click()
-                      setShowUserMenu(false)
-                    }}
-                    className="btn btn-ghost"
-                    style={{ width: '100%', justifyContent: 'flex-start', gap: '8px', padding: '6px 14px', fontSize: '13px' }}
-                  >
+                  <button onClick={() => {
+                    document.getElementById('importLocalFiles').click()
+                    setShowUserMenu(false)
+                  }} className="btn btn-ghost">
                     <IconImport size={16} /> Import Local Files
                   </button>
                   
-                  <input
-                    id="importLocalFiles"
-                    type="file"
-                    accept=".json"
-                    style={{ display: 'none' }}
-                    onChange={async (e) => {
-                      const file = e.target.files[0]
-                      if (!file) return
-                      
-                      try {
-                        const text = await file.text()
-                        const data = JSON.parse(text)
-                        showToast(`Imported ${data.length} file references`, 'success')
-                      } catch (err) {
-                        showToast('Invalid file format', 'error')
-                      }
-                      e.target.value = ''
-                    }}
-                  />
+                  <input id="importLocalFiles" type="file" accept=".json" style={{ display: 'none' }} onChange={async (e) => {
+                    const file = e.target.files[0]
+                    if (!file) return
+                    try {
+                      const text = await file.text()
+                      const data = JSON.parse(text)
+                      showToast(`Imported ${data.length} file references`, 'success')
+                    } catch (err) {
+                      showToast('Invalid file format', 'error')
+                    }
+                    e.target.value = ''
+                  }} />
                 </div>
 
-                <button onClick={() => { signOut(); setShowUserMenu(false) }} className="btn btn-ghost" style={{
-                  width: '100%', justifyContent: 'flex-start', gap: '10px', color: 'var(--text-muted)',
-                  borderTop: '1px solid var(--glass-border)', marginTop: '4px', padding: '10px 14px'
-                }}>
+                <button onClick={() => { signOut(); setShowUserMenu(false) }} className="btn btn-ghost logout-btn">
                   <IconLogout /> Logout
                 </button>
               </div>
