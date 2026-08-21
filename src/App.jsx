@@ -757,8 +757,14 @@ export default function App() {
       <div className="bg-glow" />
       <div className="container fade-in" style={{ position: 'relative', zIndex: 1 }}>
 
-        {/* ===== HEADER - SIMPLIFIED ===== */}
-        <header className="app-header" style={{ position: 'relative', zIndex: 100 }}>
+        {/* ===== HEADER - LOGO + MENU ONLY ===== */}
+        <header className="app-header" style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          position: 'relative', 
+          zIndex: 100 
+        }}>
           <div className="header-left">
             <div className="logo-container" style={{ display: 'flex', alignItems: 'center', gap: '0px' }}>
               <LogoIcon className="logo-svg" style={{ width: '40px', height: '40px' }} />
