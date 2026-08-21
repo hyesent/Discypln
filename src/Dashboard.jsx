@@ -470,16 +470,13 @@ export default function Dashboard({ user, supabase, onNavigate, onOpenStats }) {
         )}
       </div>
 
-      {/* ===== FEATURE CARDS ===== */}
-      <div className="dashboard-feature-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '24px' }}>
-
+      {/* ===== FEATURE CARDS - Responsive Grid ===== */}
+      <div className="dashboard-feature-grid">
         {/* Notes Card */}
         <div
           className="card card-glow"
-          style={{ cursor: 'pointer', padding: '24px', transition: 'all 0.2s ease' }}
+          style={{ cursor: 'pointer', padding: '24px' }}
           onClick={() => onNavigate('notes')}
-          onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.borderColor = 'var(--glass-border-hover)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = 'var(--glass-border)'; }}
         >
           <div style={{ marginBottom: '8px' }}>
             <IconNotes size={28} />
@@ -497,10 +494,8 @@ export default function Dashboard({ user, supabase, onNavigate, onOpenStats }) {
         {/* Tasks Card */}
         <div
           className="card card-glow"
-          style={{ cursor: 'pointer', padding: '24px', transition: 'all 0.2s ease' }}
+          style={{ cursor: 'pointer', padding: '24px' }}
           onClick={() => onNavigate('tasks')}
-          onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.borderColor = 'var(--glass-border-hover)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = 'var(--glass-border)'; }}
         >
           <div style={{ marginBottom: '8px' }}>
             <IconTasks size={28} />
@@ -520,10 +515,8 @@ export default function Dashboard({ user, supabase, onNavigate, onOpenStats }) {
         {/* Journal Card */}
         <div
           className="card card-glow"
-          style={{ cursor: 'pointer', padding: '24px', transition: 'all 0.2s ease' }}
+          style={{ cursor: 'pointer', padding: '24px' }}
           onClick={() => onNavigate('journal')}
-          onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.borderColor = 'var(--glass-border-hover)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = 'var(--glass-border)'; }}
         >
           <div style={{ marginBottom: '8px' }}>
             <IconJournal size={28} />
@@ -537,7 +530,6 @@ export default function Dashboard({ user, supabase, onNavigate, onOpenStats }) {
             <span style={{ color: 'var(--brand-blue)', fontSize: '14px', fontWeight: 500 }}>Open →</span>
           </div>
         </div>
-
       </div>
     </>
   )
