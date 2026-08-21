@@ -757,7 +757,7 @@ export default function App() {
       <div className="bg-glow" />
       <div className="container fade-in" style={{ position: 'relative', zIndex: 1 }}>
 
-        {/* ===== HEADER ===== */}
+        {/* ===== HEADER - SIMPLIFIED ===== */}
         <header className="app-header" style={{ position: 'relative', zIndex: 100 }}>
           <div className="header-left">
             <div className="logo-container" style={{ display: 'flex', alignItems: 'center', gap: '0px' }}>
@@ -775,22 +775,6 @@ export default function App() {
                 animation: 'gradientShift 15s ease infinite'
               }}>
                 iscypln
-              </span>
-            </div>
-            <div className="header-center">
-              <span className="greeting-text">
-                {greeting}{' '}
-                <span style={{ color: 'var(--text-tertiary)' }}>
-                  {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </span>
-              <span className="date-text">
-                {currentTime.toLocaleDateString('en-US', {
-                  weekday: 'long',
-                  month: 'long',
-                  day: 'numeric',
-                  year: 'numeric'
-                })}
               </span>
             </div>
           </div>
