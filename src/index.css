@@ -726,7 +726,7 @@ body {
 /* ===== RESPONSIVE ===== */
 @media (max-width: 768px) {
   .container { padding: var(--space-4); }
-  .app-header { flex-direction: column; align-items: stretch; gap: var(--space-2); padding: var(--space-4); border-radius: var(--radius-lg); }
+  .app-header { flex-direction: column; align-items: stretch; gap: var(--space-3); padding: var(--space-4); border-radius: var(--radius-lg); }
   .header-left { justify-content: space-between; }
   .header-center { display: none; }
   .logo-text { font-size: 20px; }
@@ -751,7 +751,253 @@ body {
   .stats-grid { grid-template-columns: 1fr 1fr; gap: var(--space-2); }
   .stat-value { font-size: 17px; }
    }
-   
+   /* ============================================================
+   ADDITIONS FOR HEADER + DASHBOARD SEPARATION
+   ============================================================ */
+
+/* ===== HEADER - Simplified ===== */
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--space-5);
+  margin-bottom: var(--space-6);
+  border-radius: var(--radius-xl);
+  min-height: 68px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  transition: border var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.app-header:hover {
+  border-color: var(--glass-border-hover);
+  box-shadow: var(--glass-shadow-heavy);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ===== STATS HERO (Greeting Card) ===== */
+.stats-hero {
+  position: relative;
+  isolation: isolate;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur-heavy));
+  -webkit-backdrop-filter: blur(var(--glass-blur-heavy));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-2xl);
+  padding: var(--space-6);
+  box-shadow: var(--glass-shadow-heavy);
+  transition: border var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
+  overflow: hidden;
+}
+
+.stats-hero::before {
+  content: '';
+  position: absolute;
+  inset: -60px;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 40%, var(--glow-color), transparent 60%);
+  opacity: 0.6;
+  transform: translateZ(0);
+}
+
+.stats-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.stats-hero:hover {
+  border-color: var(--glass-border-hover);
+}
+
+/* ===== STATS GRID ===== */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.stat-item {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  text-align: center;
+  transition: all var(--duration-fast) var(--spring);
+}
+
+.stat-item:hover {
+  transform: translateY(-2px) translateZ(0);
+  border-color: var(--glass-border-hover);
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.stat-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+/* ===== DISCIPLINE BADGE ===== */
+.discipline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-full);
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--gradient-primary);
+  color: var(--text-inverse);
+  box-shadow: 0 4px 16px rgba(79, 140, 255, 0.25);
+}
+
+/* ===== DASHBOARD FEATURE GRID ===== */
+.dashboard-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.card-glow {
+  transition: all 0.2s ease;
+}
+
+.card-glow:hover {
+  transform: translateY(-4px);
+  border-color: var(--glass-border-hover);
+}
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 992px) {
+  .stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  
+  .dashboard-feature-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .app-header {
+    padding: var(--space-3) var(--space-4);
+    min-height: 60px;
+    border-radius: var(--radius-lg);
+  }
+  
+  .logo-text {
+    font-size: 20px;
+  }
+  
+  .logo-svg {
+    width: 32px;
+    height: 32px;
+  }
+  
+  .stats-hero {
+    padding: var(--space-4);
+  }
+  
+  .stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  
+  .stat-value {
+    font-size: 17px;
+  }
+  
+  .stat-item {
+    padding: var(--space-2) var(--space-3);
+  }
+  
+  .hero-title {
+    font-size: 28px !important;
+  }
+  
+  .dashboard-feature-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-header {
+    padding: var(--space-2) var(--space-3);
+    min-height: 52px;
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-4);
+  }
+  
+  .logo-text {
+    font-size: 17px;
+  }
+  
+  .logo-svg {
+    width: 28px;
+    height: 28px;
+  }
+  
+  .stats-hero {
+    padding: var(--space-3);
+    border-radius: var(--radius-xl);
+  }
+  
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+  
+  .stat-value {
+    font-size: 15px;
+  }
+  
+  .stat-item {
+    padding: 6px 10px;
+  }
+  
+  .hero-title {
+    font-size: 22px !important;
+  }
+  
+  .discipline-badge {
+    font-size: 11px;
+    padding: 4px 12px;
+  }
+}
 /* ===== RING GRADIENT ===== */
 #ringGrad {
   --brand-cyan: #22E2FF;
