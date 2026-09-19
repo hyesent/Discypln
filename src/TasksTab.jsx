@@ -521,7 +521,8 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   //  SUBTASKS
   // ============================================================
   const addSubTask = useCallback(async (taskId) => {
-    if (!newSubTask.trim() || !supabase || !user) return    const current = subTasks[taskId] || []
+       if (!newSubTask.trim() || !supabase || !user) return
+    const current = subTasks[taskId] || []
     const updated = [...current, { id: `${Date.now()}-${Math.random().toString(36).slice(2,7)}`, text: newSubTask.trim(), done: false }]
     const { error } = await supabase.from('tasks').update({ subtasks: updated }).eq('id', taskId).eq('user_id', user.id)
     if (!error) { setSubTasks((p) => ({ ...p, [taskId]: updated })); setNewSubTask(''); toast('Subtask added', 'success') }
