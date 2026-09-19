@@ -917,20 +917,35 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   //  RENDER HELPERS
   // ============================================================
   const renderPillNav = (opts = {}) => {
-    const { bottom = false } = opts
-    return (
-      <div className={bottom ? 'pill-nav-bottom' : 'pill-nav'} style={bottom ? undefined : { marginBottom: 16 }}>
-        <button
-          className={`pill-btn ${(bottom ? (page === 'activeTasks' || page === 'taskList') && page === 'activeTasks' : false) ? 'active' : ''}`}
-          onClick={() => setPage('activeTasks')}
-        >Active Tasks</button>
-        <button
-          className={`pill-btn ${(bottom ? page === 'taskList' : false) ? 'active' : ''}`}
-          onClick={() => setPage('taskList')}
-        >Task List</button>
-      </div>
-    )
-  }
+  const { bottom = false } = opts
+  const activeCount = activeDaily.length + activeWeekly.length + activeCustom.length
+  const listCount = tasks.length
+
+  return (
+    <div className={bottom ? 'pill-nav-bottom' : 'pill-nav'} style={bottom ? undefined : { marginBottom: 16 }}>
+      <button
+        className={`pill-btn ${bottom && page === 'activeTasks' ? 'active' : ''}`}
+        onClick={() => setPage('activeTasks')}
+        style={{ position: 'relative' }}
+      >
+        Active Tasks
+        {!bottom && activeCount > 0 && (
+          <span className="pill-badge pill-badge-red">{activeCount > 99 ? '99+' : activeCount}</span>
+        )}
+      </button>
+      <button
+        className={`pill-btn ${bottom && page === 'taskList' ? 'active' : ''}`}
+        onClick={() => setPage('taskList')}
+        style={{ position: 'relative' }}
+      >
+        Task List
+        {!bottom && listCount > 0 && (
+          <span className="pill-badge pill-badge-neutral">{listCount > 99 ? '99+' : listCount}</span>
+        )}
+      </button>
+    </div>
+  )
+    }
 
   const renderSubtaskChip = (taskId) => {
     const st = subTasks[taskId] || []
