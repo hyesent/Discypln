@@ -1,7 +1,7 @@
 // ============================================================
-//  TASKS TAB — V3
+//  TASKS TAB — V4
 //  Pages: Tasks | Active Tasks | Task List | History
-//  Charts live in the Extensive Analytics modal only
+//  Timer state persisted via active_started_at, shift_minutes, shift_date
 // ============================================================
 
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
@@ -149,7 +149,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   const [loading, setLoading] = useState(false)
 
   // ---- navigation ----
-  const [page, setPage] = useState('tasks') // 'tasks' | 'activeTasks' | 'taskList' | 'history'
+  const [page, setPage] = useState('tasks')
 
   // ---- modals ----
   const [showAddTask, setShowAddTask] = useState(false)
@@ -194,7 +194,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   const setPomoTime = useCallback((sec) => { pomoRef.current = sec; setPomodoroTime(sec) }, [])
 
   // ---- active task timers ----
-  // keyed by task id: { phase: 'countdown'|'active'|'idle', remaining, elapsed, running, shifted }
   const [timers, setTimers] = useState({})
   const timersRef = useRef({})
 
@@ -218,7 +217,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   const sessionTimeRef = useRef(25 * 60)
   const sessionElapsedRef = useRef(0)
 
-  const setSessionTime = useCallback((sec) => { sessionTimeRef.current = sec; setSessionPomodoroTime(sec) }, [])
   useEffect(() => { sessionTaskIdRef.current = sessionTaskId }, [sessionTaskId])
 
   // ---- theme observer ----
@@ -286,7 +284,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   useEffect(() => { fetchTasks() }, [fetchTasks])
 
   // ============================================================
-  //  PUSH SUBSCRIBE (permission asked separately, after first task)
+  //  PUSH SUBSCRIBE
   // ============================================================
   useEffect(() => {
     if (!user || !supabase) return
@@ -306,12 +304,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   // ============================================================
   const handleRollover = useCallback(async (rows, now) => {
     if (!supabase || !user) return
-    const dayKey = toDayKey(now)
-
-    // 1. Record missed entries (task done=true but its day passed without user checking → it's already done, skip)
-    //    Missed entries are recorded by the rollover for tasks that were done but not re-completed.
-    //    For our model, rollover means: the task was done last cycle, we record the completion for THAT day,
-    //    then reset. Missed entries are handled by the missed pass below.
 
     const payload = rows.map((t) => ({
       user_id: user.id,
@@ -330,6 +322,9 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
       last_completed_on: t.last_completed_on || toDayKey(t.due_date || t.created_at),
       due_date: nextDueDate(t, now),
       reset_count: (t.reset_count || 0) + 1,
+      shift_minutes: 0,
+      shift_date: null,
+      active_started_at: null,
       updated_at: now.toISOString(),
     }).eq('id', t.id).eq('user_id', user.id)))
 
@@ -341,11 +336,10 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
 
   // ============================================================
   //  MISSED SWEEP
-  //  Runs on mount + on focus. Anything whose day has ended unticked
-  //  is recorded as missed and marked in local state.
   // ============================================================
   useEffect(() => {
-    if (!supabase || !user || completions.length === 0 && tasks.length === 0) return
+    if (!supabase || !user) return
+    if (completions.length === 0 && tasks.length === 0) return
     let cancelled = false
 
     const sweep = async () => {
@@ -356,11 +350,8 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
       tasks.forEach((t) => {
         if (t.done) return
         if (t.type !== 'habit' && !t.due_date) return
-        // Tasks that should have been done before today and never were
-        const dueDay = t.type === 'habit'
-          ? (t.category === 'weekly' ? null : toDayKey(t.created_at))
-          : toDayKey(t.due_date)
-        if (t.category === 'weekly') return // handled at weekly boundary via rollover
+        if (t.category === 'weekly') return
+        const dueDay = t.type === 'habit' ? toDayKey(t.created_at) : toDayKey(t.due_date)
         if (dueDay && dueDay < today && dueDay >= yesterday) {
           const already = completions.find((c) => c.task_id === t.id && c.completed_on === dueDay)
           if (!already) toMiss.push({ task: t, day: dueDay })
@@ -409,7 +400,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
     const now = new Date(); const dayKey = toDayKey(now)
     const nextDone = !t.done
 
-    const patch = { done: nextDone, updated_at: now.toISOString() }
+    const patch = { done: nextDone, updated_at: now.toISOString(), active_started_at: null }
     if (t.type === 'habit') patch.last_completed_on = nextDone ? dayKey : null
 
     const { error } = await supabase.from('tasks').update(patch).eq('id', id).eq('user_id', user.id)
@@ -435,6 +426,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
     await supabase.from('tasks').update({
       done,
       last_completed_on: done && t.type === 'habit' ? dayKey : null,
+      active_started_at: null,
       updated_at: now.toISOString(),
     }).eq('id', id).eq('user_id', user.id)
 
@@ -495,6 +487,9 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
       subtasks: subtasksArray,
       reset_count: 0,
       last_completed_on: null,
+      shift_minutes: 0,
+      shift_date: null,
+      active_started_at: null,
       created_at: new Date().toISOString(),
     })
 
@@ -521,7 +516,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   //  SUBTASKS
   // ============================================================
   const addSubTask = useCallback(async (taskId) => {
-       if (!newSubTask.trim() || !supabase || !user) return
+    if (!newSubTask.trim() || !supabase || !user) return
     const current = subTasks[taskId] || []
     const updated = [...current, { id: `${Date.now()}-${Math.random().toString(36).slice(2,7)}`, text: newSubTask.trim(), done: false }]
     const { error } = await supabase.from('tasks').update({ subtasks: updated }).eq('id', taskId).eq('user_id', user.id)
@@ -591,7 +586,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   }, [pomodoroRunning])
 
   // ============================================================
-  //  FOCUS SESSION (from Task List)
+  //  FOCUS SESSION (Task List)
   // ============================================================
   const startTaskSession = useCallback((taskId) => {
     const t = tasks.find((x) => x.id === taskId); if (!t) return
@@ -627,12 +622,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   useEffect(() => () => { if (sessionIntervalRef.current) clearInterval(sessionIntervalRef.current) }, [])
 
   // ============================================================
-  //  ACTIVE TASK TIMER LOGIC
-  //  Each visible Active card has an entry in `timers`.
-  //  phase: 'idle' → not yet started (weekly/one-time no due time)
-  //         'countdown' → before due time (state 1)
-  //         'active' → estimated timer running (state 2)
-  //  weekly + one-time + daily all share this; only the entry conditions differ.
+  //  ACTIVE TASKS FILTER
   // ============================================================
   const activeTasksFor = useCallback((category) => {
     const now = new Date()
@@ -647,19 +637,12 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
       if (category === 'custom' && t.category !== 'custom') return false
 
       if (t.category === 'daily') {
-        // include daily tasks whose time is today, or with no time
         if (!t.time) return true
         const [h, m] = t.time.split(':').map(Number)
         const dueMin = h * 60 + m
-        // active window: from dueMin - 30 up to end of day
         return nowMin >= dueMin - 30
       }
-      if (t.category === 'weekly') {
-        if (t.weekday !== weekday) return false
-        // weekly tasks enter on their weekday
-        return true
-      }
-      // custom
+      if (t.category === 'weekly') return t.weekday === weekday
       return toDayKey(t.due_date) === today
     })
   }, [tasks])
@@ -668,97 +651,272 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   const activeWeekly = useMemo(() => activeTasksFor('weekly'), [activeTasksFor])
   const activeCustom = useMemo(() => activeTasksFor('custom'), [activeTasksFor])
 
-  // timer tick loop for all active cards
+  // ============================================================
+  //  TIMER INITIALIZATION — runs on mount + tasks change
+  //  Computes phase and remaining from wall clock + persisted state
+  // ============================================================
+  const computeInitialTimer = useCallback((t, now) => {
+    const today = toDayKey(now)
+    const nowMin = now.getHours() * 60 + now.getMinutes()
+    const estimated = (t.estimated_minutes || 25) * 60
+
+    const shift = t.shift_date === today ? (t.shift_minutes || 0) : 0
+
+    let dueMin = null
+    if (t.time) {
+      const [h, m] = t.time.split(':').map(Number)
+      if (Number.isFinite(h) && Number.isFinite(m)) dueMin = h * 60 + m
+    }
+    const shiftedDue = dueMin != null ? dueMin + shift : null
+
+    // Manually started (weekly/one-time) — has active_started_at but no due time
+    if (t.active_started_at && shiftedDue == null) {
+      const startedAt = new Date(t.active_started_at).getTime()
+      const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+      const remaining = estimated - elapsedSec
+      if (remaining > 0) return { phase: 'active', remaining, elapsed: elapsedSec, running: true }
+      return { phase: 'idle', remaining: 0, elapsed: estimated, running: false, expired: true }
+    }
+
+    // Has a due time
+    if (shiftedDue != null) {
+      // Active phase, persisted start
+      if (t.active_started_at && nowMin >= shiftedDue) {
+        const startedAt = new Date(t.active_started_at).getTime()
+        const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+        const remaining = estimated - elapsedSec
+        if (remaining > 0) return { phase: 'active', remaining, elapsed: elapsedSec, running: true }
+        return { phase: 'expired', remaining: 0, elapsed: estimated, running: false, expired: true }
+      }
+      // Pre-due countdown
+      if (nowMin < shiftedDue) {
+        return { phase: 'countdown', remaining: (shiftedDue - nowMin) * 60, elapsed: 0, running: true }
+      }
+      // Due time passed, no persisted start → start now
+      return { phase: 'needs_start_stamp', remaining: estimated, elapsed: 0, running: true }
+    }
+
+    // No due time at all — idle
+    return { phase: 'idle', remaining: estimated, elapsed: 0, running: false }
+  }, [])
+
+  useEffect(() => {
+    const now = new Date()
+    const all = [...activeDaily, ...activeWeekly, ...activeCustom]
+    const next = { ...timersRef.current }
+
+    all.forEach((t) => {
+      const existing = next[t.id]
+      // Re-init if task's persisted state changed, or no timer entry exists
+      const existingStarted = existing?.startedAtStamp
+      const taskStarted = t.active_started_at
+      const shiftChanged = existing?.shiftStamp !== `${t.shift_minutes || 0}|${t.shift_date || ''}`
+
+      if (!existing || existingStarted !== taskStarted || shiftChanged) {
+        const computed = computeInitialTimer(t, now)
+        if (computed.phase === 'needs_start_stamp') {
+          // Stamp active_started_at, then it'll be 'active' on next pass
+          const stamp = new Date().toISOString()
+          supabase.from('tasks').update({ active_started_at: stamp }).eq('id', t.id).eq('user_id', user.id)
+            .then(() => {
+              setTasks((prev) => prev.map((x) => x.id === t.id ? { ...x, active_started_at: stamp } : x))
+            })
+          next[t.id] = {
+            phase: 'active', remaining: computed.remaining, elapsed: 0, running: true,
+            startedAtStamp: stamp,
+            shiftStamp: `${t.shift_minutes || 0}|${t.shift_date || ''}`,
+          }
+        } else if (computed.phase === 'expired') {
+          // Expired while away
+          if (t.category === 'daily') {
+            markTaskStatus(t.id, 'missed')
+          } else {
+            supabase.from('tasks').update({ active_started_at: null }).eq('id', t.id).eq('user_id', user.id)
+            next[t.id] = {
+              phase: 'idle', remaining: 0, elapsed: computed.elapsed || 0, running: false,
+              startedAtStamp: null,
+              shiftStamp: `${t.shift_minutes || 0}|${t.shift_date || ''}`,
+            }
+          }
+        } else {
+          next[t.id] = {
+            phase: computed.phase,
+            remaining: computed.remaining,
+            elapsed: computed.elapsed || 0,
+            running: computed.running,
+            startedAtStamp: taskStarted || null,
+            shiftStamp: `${t.shift_minutes || 0}|${t.shift_date || ''}`,
+          }
+        }
+      }
+    })
+
+    // Drop timers for tasks no longer active
+    const activeIds = new Set(all.map((t) => t.id))
+    Object.keys(next).forEach((id) => { if (!activeIds.has(id)) delete next[id] })
+
+    timersRef.current = next
+    setTimers(next)
+  }, [activeDaily, activeWeekly, activeCustom, computeInitialTimer, markTaskStatus, supabase, user])
+
+  // ============================================================
+  //  TIMER TICK — every second, only advances running timers
+  // ============================================================
   useEffect(() => {
     const id = setInterval(() => {
       const now = new Date()
       const nowMin = now.getHours() * 60 + now.getMinutes()
       const all = [...activeDaily, ...activeWeekly, ...activeCustom]
+      const next = { ...timersRef.current }
+      let changed = false
 
       all.forEach((t) => {
-        const entry = timersRef.current[t.id]
+        const entry = next[t.id]
+        if (!entry || !entry.running) return
         const estimated = (t.estimated_minutes || 25) * 60
 
-        // determine due time in minutes
-        let dueMin = null
-        if (t.time) {
-          const [h, m] = t.time.split(':').map(Number)
-          if (Number.isFinite(h) && Number.isFinite(m)) dueMin = h * 60 + m
-        }
-
-        // If not initialized, do it now
-        if (!entry) {
-          const shifted = t._shiftedMinutes || 0
-          const shiftedDue = dueMin != null ? dueMin + shifted : null
-
-          if (shiftedDue != null && nowMin < shiftedDue) {
-            updateTimer(t.id, {
-              phase: 'countdown',
-              remaining: (shiftedDue - nowMin) * 60,
-              elapsed: 0,
-              running: true,
-            })
-          } else if (shiftedDue != null && nowMin >= shiftedDue) {
-            // due time passed, active phase with estimated timer
-            updateTimer(t.id, {
-              phase: 'active',
-              remaining: estimated,
-              elapsed: 0,
-              running: true,
-              startedAt: Date.now(),
-            })
-          } else {
-            // no due time → idle, awaiting Start
-            updateTimer(t.id, { phase: 'idle', remaining: estimated, elapsed: 0, running: false })
-          }
-          return
-        }
-
-        if (!entry.running) return
-
         if (entry.phase === 'countdown') {
-          const rem = entry.remaining - 1
-          if (rem <= 0) {
-            // switch to active phase
-            updateTimer(t.id, { phase: 'active', remaining: estimated, elapsed: 0, startedAt: Date.now() })
-          } else {
-            updateTimer(t.id, { remaining: rem })
+          // Countdown uses wall clock — recompute instead of decrement
+          const today = toDayKey(now)
+          const shift = t.shift_date === today ? (t.shift_minutes || 0) : 0
+          let dueMin = null
+          if (t.time) {
+            const [h, m] = t.time.split(':').map(Number)
+            if (Number.isFinite(h) && Number.isFinite(m)) dueMin = h * 60 + m
+          }
+          const shiftedDue = dueMin != null ? dueMin + shift : null
+          if (shiftedDue != null && nowMin < shiftedDue) {
+            const rem = (shiftedDue - nowMin) * 60
+            if (rem !== entry.remaining) { next[t.id] = { ...entry, remaining: rem }; changed = true }
+          } else if (shiftedDue != null) {
+            // Transition to active — stamp
+            const stamp = new Date().toISOString()
+            supabase.from('tasks').update({ active_started_at: stamp }).eq('id', t.id).eq('user_id', user.id)
+              .then(() => {
+                setTasks((prev) => prev.map((x) => x.id === t.id ? { ...x, active_started_at: stamp } : x))
+              })
+            next[t.id] = {
+              ...entry,
+              phase: 'active', remaining: estimated, elapsed: 0,
+              startedAtStamp: stamp,
+            }
+            changed = true
           }
         } else if (entry.phase === 'active') {
-          const rem = entry.remaining - 1
-          const el = (entry.elapsed || 0) + 1
-          if (rem <= 0) {
-            if (t.category === 'daily') {
-              // auto-missed for daily
-              markTaskStatus(t.id, 'missed')
-            } else {
-              // weekly/one-time: stop, don't auto-tick
-              updateTimer(t.id, { phase: 'idle', remaining: 0, elapsed: el, running: false })
+          // Active uses wall clock too — recompute from startedAtStamp
+          if (entry.startedAtStamp) {
+            const startedAt = new Date(entry.startedAtStamp).getTime()
+            const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+            const remaining = Math.max(0, estimated - elapsedSec)
+            if (remaining <= 0) {
+              if (t.category === 'daily') {
+                markTaskStatus(t.id, 'missed')
+                delete next[t.id]
+              } else {
+                supabase.from('tasks').update({ active_started_at: null }).eq('id', t.id).eq('user_id', user.id)
+                next[t.id] = { ...entry, phase: 'idle', remaining: 0, elapsed: estimated, running: false, startedAtStamp: null }
+              }
+            } else if (remaining !== entry.remaining) {
+              next[t.id] = { ...entry, remaining, elapsed: elapsedSec }
             }
+            changed = true
           } else {
-            updateTimer(t.id, { remaining: rem, elapsed: el })
+            // No stamp — decrement as fallback
+            const rem = entry.remaining - 1
+            if (rem <= 0) {
+              if (t.category === 'daily') { markTaskStatus(t.id, 'missed'); delete next[t.id] }
+              else { next[t.id] = { ...entry, phase: 'idle', remaining: 0, running: false } }
+            } else {
+              next[t.id] = { ...entry, remaining: rem, elapsed: (entry.elapsed || 0) + 1 }
+            }
+            changed = true
           }
         }
       })
+
+      if (changed) {
+        timersRef.current = next
+        setTimers(next)
+      }
     }, 1000)
     return () => clearInterval(id)
-  }, [activeDaily, activeWeekly, activeCustom, updateTimer, markTaskStatus])
-
-  // shift handlers
-  const shiftTask = useCallback((taskId, minutes) => {
-    setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, _shiftedMinutes: (t._shiftedMinutes || 0) + minutes } : t))
-    updateTimer(taskId, { remaining: (timersRef.current[taskId]?.remaining || 0) + minutes * 60 })
-    toast(`Shifted +${minutes}m`, 'info')
-  }, [updateTimer, toast])
-
-  const startActiveTimer = useCallback((taskId) => {
-    const entry = timersRef.current[taskId]
-    if (!entry) return
-    updateTimer(taskId, { phase: 'active', running: true, remaining: entry.remaining, startedAt: Date.now() })
-  }, [updateTimer])
+  }, [activeDaily, activeWeekly, activeCustom, markTaskStatus, supabase, user])
 
   // ============================================================
-  //  DERIVED — analytics from completions
+  //  RESUME HANDLER — recompute on visibility return
+  // ============================================================
+  useEffect(() => {
+    const onVis = () => {
+      if (document.hidden) return
+      const now = new Date()
+      const all = [...activeDaily, ...activeWeekly, ...activeCustom]
+      const next = { ...timersRef.current }
+
+      all.forEach((t) => {
+        const entry = next[t.id]
+        if (!entry) return
+        const estimated = (t.estimated_minutes || 25) * 60
+
+        if (entry.phase === 'active' && entry.startedAtStamp) {
+          const startedAt = new Date(entry.startedAtStamp).getTime()
+          const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+          const remaining = Math.max(0, estimated - elapsedSec)
+          if (remaining <= 0) {
+            if (t.category === 'daily') { markTaskStatus(t.id, 'missed'); delete next[t.id] }
+            else { next[t.id] = { ...entry, phase: 'idle', remaining: 0, elapsed: estimated, running: false } }
+          } else {
+            next[t.id] = { ...entry, remaining, elapsed: elapsedSec }
+          }
+        }
+      })
+
+      timersRef.current = next
+      setTimers(next)
+      fetchTasks()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [activeDaily, activeWeekly, activeCustom, markTaskStatus, fetchTasks])
+
+  // ============================================================
+  //  SHIFT — writes to DB, updates timer immediately
+  // ============================================================
+  const shiftTask = useCallback(async (taskId, minutes) => {
+    const t = tasks.find((x) => x.id === taskId)
+    if (!t || !supabase || !user) return
+    const today = toDayKey()
+    const base = t.shift_date === today ? (t.shift_minutes || 0) : 0
+    const newShift = base + minutes
+
+    await supabase.from('tasks').update({
+      shift_minutes: newShift,
+      shift_date: today,
+    }).eq('id', taskId).eq('user_id', user.id)
+
+    setTasks((prev) => prev.map((x) => x.id === taskId
+      ? { ...x, shift_minutes: newShift, shift_date: today }
+      : x))
+
+    updateTimer(taskId, {
+      remaining: (timersRef.current[taskId]?.remaining || 0) + minutes * 60,
+    })
+    toast(`Shifted +${minutes}m`, 'info')
+  }, [tasks, supabase, user, updateTimer, toast])
+
+  const startActiveTimer = useCallback(async (taskId) => {
+    const entry = timersRef.current[taskId]
+    if (!entry || !supabase || !user) return
+    const stamp = new Date().toISOString()
+    await supabase.from('tasks').update({ active_started_at: stamp }).eq('id', taskId).eq('user_id', user.id)
+    setTasks((prev) => prev.map((x) => x.id === taskId ? { ...x, active_started_at: stamp } : x))
+    updateTimer(taskId, {
+      phase: 'active', running: true, remaining: entry.remaining,
+      startedAtStamp: stamp,
+    })
+  }, [supabase, user, updateTimer])
+
+  // ============================================================
+  //  DERIVED ANALYTICS
   // ============================================================
   const completionsByDay = useMemo(() => {
     const m = {}
@@ -788,11 +946,8 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
     plugins: {
       legend: { labels: { color: chartTheme.text, boxWidth: 12, padding: 8, font: { size: 11 } } },
       tooltip: {
-        backgroundColor: chartTheme.surface,
-        titleColor: chartTheme.text,
-        bodyColor: chartTheme.text,
-        borderColor: chartTheme.grid,
-        borderWidth: 1,
+        backgroundColor: chartTheme.surface, titleColor: chartTheme.text,
+        bodyColor: chartTheme.text, borderColor: chartTheme.grid, borderWidth: 1,
       },
     },
     scales: {
@@ -874,10 +1029,9 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
 
   const heatmap = useMemo(() => {
     const cells = []
-    // 5 weeks back, aligned to Monday, 35 cells
     const today = new Date()
     const start = getWeekStart(today)
-    start.setDate(start.getDate() - 28) // 4 weeks back + current = 5 rows
+    start.setDate(start.getDate() - 28)
     for (let i = 0; i < 35; i++) {
       const d = new Date(start); d.setDate(start.getDate() + i)
       const dayKey = toDayKey(d)
@@ -917,35 +1071,35 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   //  RENDER HELPERS
   // ============================================================
   const renderPillNav = (opts = {}) => {
-  const { bottom = false } = opts
-  const activeCount = activeDaily.length + activeWeekly.length + activeCustom.length
-  const listCount = tasks.length
+    const { bottom = false } = opts
+    const activeCount = activeDaily.length + activeWeekly.length + activeCustom.length
+    const listCount = tasks.length
 
-  return (
-    <div className={bottom ? 'pill-nav-bottom' : 'pill-nav'} style={bottom ? undefined : { marginBottom: 16 }}>
-      <button
-        className={`pill-btn ${bottom && page === 'activeTasks' ? 'active' : ''}`}
-        onClick={() => setPage('activeTasks')}
-        style={{ position: 'relative' }}
-      >
-        Active Tasks
-        {!bottom && activeCount > 0 && (
-          <span className="pill-badge pill-badge-red">{activeCount > 99 ? '99+' : activeCount}</span>
-        )}
-      </button>
-      <button
-        className={`pill-btn ${bottom && page === 'taskList' ? 'active' : ''}`}
-        onClick={() => setPage('taskList')}
-        style={{ position: 'relative' }}
-      >
-        Task List
-        {!bottom && listCount > 0 && (
-          <span className="pill-badge pill-badge-neutral">{listCount > 99 ? '99+' : listCount}</span>
-        )}
-      </button>
-    </div>
-  )
-    }
+    return (
+      <div className={bottom ? 'pill-nav-bottom' : 'pill-nav'} style={bottom ? undefined : { marginBottom: 16 }}>
+        <button
+          className={`pill-btn ${bottom && page === 'activeTasks' ? 'active' : ''}`}
+          onClick={() => setPage('activeTasks')}
+          style={{ position: 'relative' }}
+        >
+          Active Tasks
+          {!bottom && activeCount > 0 && (
+            <span className="pill-badge pill-badge-red">{activeCount > 99 ? '99+' : activeCount}</span>
+          )}
+        </button>
+        <button
+          className={`pill-btn ${bottom && page === 'taskList' ? 'active' : ''}`}
+          onClick={() => setPage('taskList')}
+          style={{ position: 'relative' }}
+        >
+          Task List
+          {!bottom && listCount > 0 && (
+            <span className="pill-badge pill-badge-neutral">{listCount > 99 ? '99+' : listCount}</span>
+          )}
+        </button>
+      </div>
+    )
+  }
 
   const renderSubtaskChip = (taskId) => {
     const st = subTasks[taskId] || []
@@ -1005,7 +1159,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   }
 
   // ============================================================
-  //  PAGE: TASKS (main)
+  //  PAGE: TASKS
   // ============================================================
   const renderTasksPage = () => (
     <>
@@ -1019,7 +1173,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
         </button>
       </div>
 
-      {/* Recurring bar */}
       <div className="card" style={{ marginBottom: 16, padding: '10px 16px', borderColor: 'rgba(79,140,255,0.15)', background: 'rgba(79,140,255,0.04)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1034,7 +1187,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
         </div>
       </div>
 
-      {/* Heatmap — calendar-shaped, self-explanatory */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <div className="tiny-label">Last 5 weeks</div>
@@ -1050,13 +1202,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
           <div className="heatmap-grid-7">
             {heatmap.map((cell) => {
               const intensity = cell.count === 0 ? 0 : cell.count < 2 ? 1 : cell.count < 4 ? 2 : cell.count < 6 ? 3 : 4
-              const colors = [
-                'var(--glass-bg)',
-                'rgba(34,197,94,0.15)',
-                'rgba(34,197,94,0.30)',
-                'rgba(34,197,94,0.50)',
-                'rgba(34,197,94,0.80)',
-              ]
+              const colors = ['var(--glass-bg)','rgba(34,197,94,0.15)','rgba(34,197,94,0.30)','rgba(34,197,94,0.50)','rgba(34,197,94,0.80)']
               return (
                 <div key={cell.dayKey}
                   className={`heatmap-cell-7 ${cell.isToday ? 'today' : ''} ${cell.isFuture ? 'future' : ''}`}
@@ -1075,7 +1221,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
           </div>
           <div className="heatmap-legend">
             <span>Less</span>
-            {['var(--glass-bg)', 'rgba(34,197,94,0.15)', 'rgba(34,197,94,0.30)', 'rgba(34,197,94,0.50)', 'rgba(34,197,94,0.80)'].map((c, i) => (
+            {['var(--glass-bg)','rgba(34,197,94,0.15)','rgba(34,197,94,0.30)','rgba(34,197,94,0.50)','rgba(34,197,94,0.80)'].map((c, i) => (
               <div key={i} className="heatmap-legend-swatch" style={{ background: c }} />
             ))}
             <span>More</span>
@@ -1083,7 +1229,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
         </div>
       </div>
 
-      {/* Stats card + extensive analytics link */}
       <div className="card" style={{ marginBottom: 16, padding: 20, position: 'relative' }}>
         <div className="stats-grid" style={{ marginTop: 0 }}>
           <div className="stat-item"><div className="stat-value" style={{ color: '#F59E0B' }}><IconTarget size={14} color="#F59E0B" />{doneCount}</div><div className="stat-label">Done</div></div>
@@ -1100,10 +1245,8 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
         </div>
       </div>
 
-      {/* Pills (plain buttons, navigate) */}
       {renderPillNav()}
 
-      {/* Pomodoro (kept on main page) */}
       <div className="card" style={{ textAlign: 'center', padding: '24px 20px' }}>
         <div className="tiny-label" style={{ marginBottom: 8 }}>Focus Timer</div>
         <div style={{ fontSize: 48, fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', letterSpacing: '-1px', lineHeight: 1 }}>{formatTime(pomodoroTime)}</div>
@@ -1193,7 +1336,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
         animation: `slideUp 0.4s var(--spring) both`,
         animationDelay: `${index * 30}ms`,
       }}>
-        {/* Top section — timer area */}
         {phase === 'countdown' && (
           <div className="active-timer-top">
             <div className="active-timer-label">Starts in</div>
@@ -1207,7 +1349,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
           </div>
         )}
 
-        {/* Main card body */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }} onClick={() => setActiveTaskId(isExpanded ? null : t.id)}>
           <input type="checkbox" checked={t.done} onChange={(e) => { e.stopPropagation(); toggleTask(t.id) }} className="custom-checkbox" style={{ width: 18, height: 18 }} />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -1220,7 +1361,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
           <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{isExpanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}</span>
         </div>
 
-        {/* Bottom section — dynamic buttons */}
         <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {phase === 'countdown' && (
             <>
@@ -1306,10 +1446,8 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
             <p style={{ fontSize: 13, marginTop: 2, color: 'var(--text-tertiary)' }}>Add a task from the Tasks page.</p>
           </div>
         ) : filteredTasks.map((t, index) => {
-          const taskSubtasks = subTasks[t.id] || []
           const isExpanded = activeTaskId === t.id
           const isActiveSession = activeSession === t.id
-          const labels = t.labels || []
 
           return (
             <div key={t.id} className="card" style={{
