@@ -1,5 +1,5 @@
 // ============================================================
-//  TASKS TAB — V5 (single source of truth timer)
+//  TASKS TAB — V6
 //  Pages: Tasks | Active Tasks | Task List | History
 //  Timer is derived from (wall clock + task fields). Never stored.
 // ============================================================
@@ -81,18 +81,14 @@ const cssVar = (name, fallback = '#888') => {
 
 // ============================================================
 //  TIMER — PURE FUNCTION OF (task, now)
-//  This replaces the entire previous timer state machine.
-//  Everything is derived. Nothing is stored.
 // ============================================================
 function computeTimerState(task, now) {
   const today = toDayKey(now)
   const nowMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60
   const estimated = Math.max(0, (task.estimated_minutes || 25) * 60)
 
-  // Shift only applies for today
   const shift = task.shift_date === today ? (task.shift_minutes || 0) : 0
 
-  // Parse the fixed time if present
   let dueMin = null
   if (task.time) {
     const [h, m] = task.time.split(':').map(Number)
@@ -100,12 +96,8 @@ function computeTimerState(task, now) {
   }
   const shiftedDue = dueMin != null ? dueMin + shift : null
 
-  // ─────────────────────────────────────────────
-  // Case 1: Fixed time tasks (daily / weekly with time)
-  // These run off the wall clock. No active_started_at needed.
-  // ─────────────────────────────────────────────
+  // Case 1: fixed time tasks
   if (shiftedDue != null) {
-    // Before the due time → countdown
     if (nowMin < shiftedDue) {
       return {
         phase: 'countdown',
@@ -114,7 +106,6 @@ function computeTimerState(task, now) {
         running: true,
       }
     }
-    // After the due time → running from the wall clock
     const elapsedSec = Math.round((nowMin - shiftedDue) * 60)
     const remaining = Math.max(0, estimated - elapsedSec)
     if (remaining <= 0) {
@@ -123,10 +114,7 @@ function computeTimerState(task, now) {
     return { phase: 'active', remaining, elapsed: elapsedSec, running: true }
   }
 
-  // ─────────────────────────────────────────────
-  // Case 2: Manually-started tasks (weekly / one-time, no time)
-  // These use active_started_at as the start marker.
-  // ─────────────────────────────────────────────
+  // Case 2: manually-started tasks
   if (task.active_started_at) {
     const startedAt = new Date(task.active_started_at).getTime()
     if (!Number.isFinite(startedAt)) {
@@ -140,9 +128,7 @@ function computeTimerState(task, now) {
     return { phase: 'active', remaining, elapsed: elapsedSec, running: true }
   }
 
-  // ─────────────────────────────────────────────
-  // Case 3: Idle — no time, no start marker
-  // ─────────────────────────────────────────────
+  // Case 3: idle
   return { phase: 'idle', remaining: estimated, elapsed: 0, running: false }
 }
 
@@ -248,7 +234,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   const [newSubTask, setNewSubTask] = useState('')
   const [subTasksToAdd, setSubTasksToAdd] = useState([])
 
-  // ---- pomodoro (standalone, not tied to tasks) ----
+  // ---- pomodoro ----
   const [pomodoroTime, setPomodoroTime] = useState(25 * 60)
   const [pomodoroRunning, setPomodoroRunning] = useState(false)
   const [isBreak, setIsBreak] = useState(false)
@@ -262,21 +248,19 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
 
   const setPomoTime = useCallback((sec) => { pomoRef.current = sec; setPomodoroTime(sec) }, [])
 
-  // ---- THE ONLY TIMER STATE: a tick counter ----
-  // Every second we bump this. All timer values are recomputed on render.
+  // ---- global 1s tick ----
   const [tick, setTick] = useState(0)
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(id)
   }, [])
-  // Recompute immediately when tab comes back into focus
   useEffect(() => {
     const onVis = () => { if (!document.hidden) setTick((t) => t + 1) }
     document.addEventListener('visibilitychange', onVis)
     return () => document.removeEventListener('visibilitychange', onVis)
   }, [])
 
-  // ---- session (Focus from Task List) ----
+  // ---- session ----
   const [activeSession, setActiveSession] = useState(null)
   const [sessionTaskId, setSessionTaskId] = useState(null)
   const [sessionPomodoroTime, setSessionPomodoroTime] = useState(25 * 60)
@@ -402,7 +386,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   useAutoReset({ tasks, enabled: !!user && !!supabase, onReset: handleRollover })
 
   // ============================================================
-  //  MISSED SWEEP
+  //  MISSED SWEEP (yesterday's misses caught on next open)
   // ============================================================
   useEffect(() => {
     if (!supabase || !user) return
@@ -501,29 +485,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
     toast(done ? 'Completed' : 'Marked missed', done ? 'success' : 'info')
     await fetchTasks()
   }, [tasks, supabase, user, toast, fetchTasks, recordCompletion])
-
-  // ============================================================
-  //  AUTO-MISS ON EXPIRY — fires once per task
-  //  Runs on the same 1s tick, but guards against double-firing.
-  // ============================================================
-  const expiredFiredRef = useRef(new Set())
-  useEffect(() => {
-    if (!supabase || !user) return
-    const now = new Date()
-    const all = [...(tasks.filter((t) => t.category === 'daily' && !t.done))]
-    all.forEach((t) => {
-      const state = computeTimerState(t, now)
-      if (state.phase === 'expired' && !expiredFiredRef.current.has(t.id)) {
-        expiredFiredRef.current.add(t.id)
-        // Daily task expired → mark missed
-        markTaskStatus(t.id, 'missed')
-      }
-      if (state.phase !== 'expired') {
-        expiredFiredRef.current.delete(t.id)
-      }
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick, tasks])
 
   // ============================================================
   //  TASK CRUD
@@ -628,7 +589,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   }, [supabase, user, subTasks, toast])
 
   // ============================================================
-  //  POMODORO (standalone)
+  //  POMODORO
   // ============================================================
   const togglePomodoro = () => {
     if (!pomodoroRunning && pomoRef.current === 0) { setPomoTime(focusDuration * 60); setIsBreak(false) }
@@ -674,7 +635,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   }, [pomodoroRunning])
 
   // ============================================================
-  //  FOCUS SESSION (Task List)
+  //  FOCUS SESSION
   // ============================================================
   const startTaskSession = useCallback((taskId) => {
     const t = tasks.find((x) => x.id === taskId); if (!t) return
@@ -710,7 +671,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   useEffect(() => () => { if (sessionIntervalRef.current) clearInterval(sessionIntervalRef.current) }, [])
 
   // ============================================================
-  //  ACTIVE TASKS FILTER
+  //  ACTIVE TASKS FILTER — excludes anything resolved today
   // ============================================================
   const activeTasksFor = useCallback((category) => {
     const now = new Date()
@@ -718,8 +679,17 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
     const nowMin = now.getHours() * 60 + now.getMinutes()
     const weekday = WEEKDAYS[now.getDay()]
 
+    // Any task with a completion row for today is DONE for today
+    // (whether status is 'completed' or 'missed'). Keep it out of Active.
+    const resolvedToday = new Set(
+      completions
+        .filter((c) => c.completed_on === today)
+        .map((c) => c.task_id)
+    )
+
     return tasks.filter((t) => {
       if (t.done) return false
+      if (resolvedToday.has(t.id)) return false
       if (category === 'daily' && t.category !== 'daily') return false
       if (category === 'weekly' && t.category !== 'weekly') return false
       if (category === 'custom' && t.category !== 'custom') return false
@@ -733,32 +703,67 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
       if (t.category === 'weekly') return t.weekday === weekday
       return toDayKey(t.due_date) === today
     })
-  }, [tasks])
+  }, [tasks, completions])
 
   const activeDaily = useMemo(() => activeTasksFor('daily'), [activeTasksFor])
   const activeWeekly = useMemo(() => activeTasksFor('weekly'), [activeTasksFor])
   const activeCustom = useMemo(() => activeTasksFor('custom'), [activeTasksFor])
 
   // ============================================================
-  //  TIMERS — computed on every render from wall clock.
-  //  `tick` is the only state that changes; it just forces recompute.
+  //  TIMERS — derived each render, no memo
   // ============================================================
   const allActive = useMemo(
     () => [...activeDaily, ...activeWeekly, ...activeCustom],
     [activeDaily, activeWeekly, activeCustom]
   )
 
-  const timers = useMemo(() => {
+  const timers = (() => {
     const now = new Date()
     const map = {}
     allActive.forEach((t) => { map[t.id] = computeTimerState(t, now) })
     return map
-    // tick is intentionally the trigger
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allActive, tick])
+  })()
 
   // ============================================================
-  //  SHIFT — writes to DB, timer recomputes from wall clock
+  //  AUTO-MISS ON EXPIRY
+  //  Guarded by a ref, primed from existing completions.
+  //  Failed writes remove the guard so the next tick retries.
+  // ============================================================
+  const expiredFiredRef = useRef(new Set())
+
+  // Prime from completions so a reload can't re-fire the same task.
+  useEffect(() => {
+    if (!completions.length) return
+    completions.forEach((c) => {
+      if (c.status === 'missed' || c.status === 'completed') {
+        // anything resolved today stays in the guard
+      }
+    })
+    const today = toDayKey()
+    completions
+      .filter((c) => c.completed_on === today && c.status === 'missed')
+      .forEach((c) => expiredFiredRef.current.add(c.task_id))
+  }, [completions])
+
+  useEffect(() => {
+    if (!supabase || !user) return
+    const now = new Date()
+    const dailyPending = tasks.filter((t) => t.category === 'daily' && !t.done)
+    dailyPending.forEach((t) => {
+      const state = computeTimerState(t, now)
+      if (state.phase === 'expired' && !expiredFiredRef.current.has(t.id)) {
+        expiredFiredRef.current.add(t.id)
+        markTaskStatus(t.id, 'missed').catch(() => {
+          // Write failed — allow retry next tick
+          expiredFiredRef.current.delete(t.id)
+        })
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick, tasks, supabase, user])
+
+  // ============================================================
+  //  SHIFT
   // ============================================================
   const shiftTask = useCallback(async (taskId, minutes) => {
     const t = tasks.find((x) => x.id === taskId)
@@ -1278,14 +1283,16 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   }
 
   // ============================================================
-  //  PAGE: TASK LIST
+  //  PAGE: TASK LIST — plus button opens Add Task modal
   // ============================================================
   const renderTaskListPage = () => (
     <>
       <div className="subpage-header">
         <button className="icon-btn" onClick={() => setPage('tasks')}><IconChevronLeft /></button>
         <div className="subpage-title">Task List</div>
-        <div style={{ width: 36 }} />
+        <button className="icon-btn" onClick={() => setShowAddTask(true)} aria-label="Add task">
+          <IconPlus size={18} />
+        </button>
       </div>
 
       <div className="pill-nav" style={{ marginBottom: 16 }}>
@@ -1313,7 +1320,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
           <div style={{ textAlign: 'center', padding: 30, color: 'var(--text-muted)' }}>
             <div style={{ fontSize: 32, marginBottom: 6, opacity: 0.5 }}>🎯</div>
             <p style={{ fontSize: 15, margin: 0, color: 'var(--text-secondary)' }}>Nothing here.</p>
-            <p style={{ fontSize: 13, marginTop: 2, color: 'var(--text-tertiary)' }}>Add a task from the Tasks page.</p>
+            <p style={{ fontSize: 13, marginTop: 2, color: 'var(--text-tertiary)' }}>Tap + to add a task.</p>
           </div>
         ) : filteredTasks.map((t, index) => {
           const isExpanded = activeTaskId === t.id
