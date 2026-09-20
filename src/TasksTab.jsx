@@ -1,7 +1,7 @@
 // ============================================================
-//  TASKS TAB — V4
+//  TASKS TAB — V5 (single source of truth timer)
 //  Pages: Tasks | Active Tasks | Task List | History
-//  Timer state persisted via active_started_at, shift_minutes, shift_date
+//  Timer is derived from (wall clock + task fields). Never stored.
 // ============================================================
 
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
@@ -80,6 +80,73 @@ const cssVar = (name, fallback = '#888') => {
 }
 
 // ============================================================
+//  TIMER — PURE FUNCTION OF (task, now)
+//  This replaces the entire previous timer state machine.
+//  Everything is derived. Nothing is stored.
+// ============================================================
+function computeTimerState(task, now) {
+  const today = toDayKey(now)
+  const nowMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60
+  const estimated = Math.max(0, (task.estimated_minutes || 25) * 60)
+
+  // Shift only applies for today
+  const shift = task.shift_date === today ? (task.shift_minutes || 0) : 0
+
+  // Parse the fixed time if present
+  let dueMin = null
+  if (task.time) {
+    const [h, m] = task.time.split(':').map(Number)
+    if (Number.isFinite(h) && Number.isFinite(m)) dueMin = h * 60 + m
+  }
+  const shiftedDue = dueMin != null ? dueMin + shift : null
+
+  // ─────────────────────────────────────────────
+  // Case 1: Fixed time tasks (daily / weekly with time)
+  // These run off the wall clock. No active_started_at needed.
+  // ─────────────────────────────────────────────
+  if (shiftedDue != null) {
+    // Before the due time → countdown
+    if (nowMin < shiftedDue) {
+      return {
+        phase: 'countdown',
+        remaining: Math.max(0, Math.round((shiftedDue - nowMin) * 60)),
+        elapsed: 0,
+        running: true,
+      }
+    }
+    // After the due time → running from the wall clock
+    const elapsedSec = Math.round((nowMin - shiftedDue) * 60)
+    const remaining = Math.max(0, estimated - elapsedSec)
+    if (remaining <= 0) {
+      return { phase: 'expired', remaining: 0, elapsed: estimated, running: false }
+    }
+    return { phase: 'active', remaining, elapsed: elapsedSec, running: true }
+  }
+
+  // ─────────────────────────────────────────────
+  // Case 2: Manually-started tasks (weekly / one-time, no time)
+  // These use active_started_at as the start marker.
+  // ─────────────────────────────────────────────
+  if (task.active_started_at) {
+    const startedAt = new Date(task.active_started_at).getTime()
+    if (!Number.isFinite(startedAt)) {
+      return { phase: 'idle', remaining: estimated, elapsed: 0, running: false }
+    }
+    const elapsedSec = Math.max(0, Math.floor((now.getTime() - startedAt) / 1000))
+    const remaining = Math.max(0, estimated - elapsedSec)
+    if (remaining <= 0) {
+      return { phase: 'expired', remaining: 0, elapsed: estimated, running: false }
+    }
+    return { phase: 'active', remaining, elapsed: elapsedSec, running: true }
+  }
+
+  // ─────────────────────────────────────────────
+  // Case 3: Idle — no time, no start marker
+  // ─────────────────────────────────────────────
+  return { phase: 'idle', remaining: estimated, elapsed: 0, running: false }
+}
+
+// ============================================================
 //  AUTO-RESET HOOK
 // ============================================================
 function useAutoReset({ tasks, enabled, onReset }) {
@@ -98,7 +165,9 @@ function useAutoReset({ tasks, enabled, onReset }) {
       if (rows.length) await onReset(rows, now)
     } catch (e) {
       console.error('rollover failed', e); doneForDay.current = null
-    } finally { busy.current = false }
+    } finally {
+      busy.current = false
+    }
   }, [enabled, onReset])
 
   useEffect(() => { runPass() }, [runPass, tasks.length])
@@ -179,7 +248,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   const [newSubTask, setNewSubTask] = useState('')
   const [subTasksToAdd, setSubTasksToAdd] = useState([])
 
-  // ---- pomodoro ----
+  // ---- pomodoro (standalone, not tied to tasks) ----
   const [pomodoroTime, setPomodoroTime] = useState(25 * 60)
   const [pomodoroRunning, setPomodoroRunning] = useState(false)
   const [isBreak, setIsBreak] = useState(false)
@@ -193,16 +262,18 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
 
   const setPomoTime = useCallback((sec) => { pomoRef.current = sec; setPomodoroTime(sec) }, [])
 
-  // ---- active task timers ----
-  const [timers, setTimers] = useState({})
-  const timersRef = useRef({})
-
-  const updateTimer = useCallback((id, patch) => {
-    setTimers((prev) => {
-      const next = { ...prev, [id]: { ...(prev[id] || {}), ...patch } }
-      timersRef.current = next
-      return next
-    })
+  // ---- THE ONLY TIMER STATE: a tick counter ----
+  // Every second we bump this. All timer values are recomputed on render.
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+  // Recompute immediately when tab comes back into focus
+  useEffect(() => {
+    const onVis = () => { if (!document.hidden) setTick((t) => t + 1) }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
   }, [])
 
   // ---- session (Focus from Task List) ----
@@ -240,10 +311,6 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
     if (h === 0) return `${m}m`
     if (m === 0) return `${h}h`
     return `${h}h ${m}m`
-  }
-  const formatDate = (date) => {
-    const d = new Date(date)
-    return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`
   }
   const formatDayHeader = (dayKey) => {
     const d = new Date(dayKey + 'T00:00:00')
@@ -328,7 +395,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
       updated_at: now.toISOString(),
     }).eq('id', t.id).eq('user_id', user.id)))
 
-    toast(`🔄 ${rows.length} habit${rows.length > 1 ? 's' : ''} rolled over`, 'info')
+    toast(`${rows.length} habit${rows.length > 1 ? 's' : ''} rolled over`, 'info')
     await fetchTasks()
   }, [supabase, user, toast, fetchTasks])
 
@@ -431,11 +498,32 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
     }).eq('id', id).eq('user_id', user.id)
 
     await recordCompletion(t, { status, minutes: 0, on: dayKey })
-
-    updateTimer(id, { phase: 'done' })
     toast(done ? 'Completed' : 'Marked missed', done ? 'success' : 'info')
     await fetchTasks()
-  }, [tasks, supabase, user, toast, fetchTasks, recordCompletion, updateTimer])
+  }, [tasks, supabase, user, toast, fetchTasks, recordCompletion])
+
+  // ============================================================
+  //  AUTO-MISS ON EXPIRY — fires once per task
+  //  Runs on the same 1s tick, but guards against double-firing.
+  // ============================================================
+  const expiredFiredRef = useRef(new Set())
+  useEffect(() => {
+    if (!supabase || !user) return
+    const now = new Date()
+    const all = [...(tasks.filter((t) => t.category === 'daily' && !t.done))]
+    all.forEach((t) => {
+      const state = computeTimerState(t, now)
+      if (state.phase === 'expired' && !expiredFiredRef.current.has(t.id)) {
+        expiredFiredRef.current.add(t.id)
+        // Daily task expired → mark missed
+        markTaskStatus(t.id, 'missed')
+      }
+      if (state.phase !== 'expired') {
+        expiredFiredRef.current.delete(t.id)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick, tasks])
 
   // ============================================================
   //  TASK CRUD
@@ -540,7 +628,7 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   }, [supabase, user, subTasks, toast])
 
   // ============================================================
-  //  POMODORO
+  //  POMODORO (standalone)
   // ============================================================
   const togglePomodoro = () => {
     if (!pomodoroRunning && pomoRef.current === 0) { setPomoTime(focusDuration * 60); setIsBreak(false) }
@@ -652,234 +740,25 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
   const activeCustom = useMemo(() => activeTasksFor('custom'), [activeTasksFor])
 
   // ============================================================
-  //  TIMER INITIALIZATION — runs on mount + tasks change
-  //  Computes phase and remaining from wall clock + persisted state
+  //  TIMERS — computed on every render from wall clock.
+  //  `tick` is the only state that changes; it just forces recompute.
   // ============================================================
-  const computeInitialTimer = useCallback((t, now) => {
-    const today = toDayKey(now)
-    const nowMin = now.getHours() * 60 + now.getMinutes()
-    const estimated = (t.estimated_minutes || 25) * 60
+  const allActive = useMemo(
+    () => [...activeDaily, ...activeWeekly, ...activeCustom],
+    [activeDaily, activeWeekly, activeCustom]
+  )
 
-    const shift = t.shift_date === today ? (t.shift_minutes || 0) : 0
-
-    let dueMin = null
-    if (t.time) {
-      const [h, m] = t.time.split(':').map(Number)
-      if (Number.isFinite(h) && Number.isFinite(m)) dueMin = h * 60 + m
-    }
-    const shiftedDue = dueMin != null ? dueMin + shift : null
-
-    // Manually started (weekly/one-time) — has active_started_at but no due time
-    if (t.active_started_at && shiftedDue == null) {
-      const startedAt = new Date(t.active_started_at).getTime()
-      const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
-      const remaining = estimated - elapsedSec
-      if (remaining > 0) return { phase: 'active', remaining, elapsed: elapsedSec, running: true }
-      return { phase: 'idle', remaining: 0, elapsed: estimated, running: false, expired: true }
-    }
-
-    // Has a due time
-    if (shiftedDue != null) {
-      // Active phase, persisted start
-      if (t.active_started_at && nowMin >= shiftedDue) {
-        const startedAt = new Date(t.active_started_at).getTime()
-        const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
-        const remaining = estimated - elapsedSec
-        if (remaining > 0) return { phase: 'active', remaining, elapsed: elapsedSec, running: true }
-        return { phase: 'expired', remaining: 0, elapsed: estimated, running: false, expired: true }
-      }
-      // Pre-due countdown
-      if (nowMin < shiftedDue) {
-        return { phase: 'countdown', remaining: (shiftedDue - nowMin) * 60, elapsed: 0, running: true }
-      }
-      // Due time passed, no persisted start → start now
-      return { phase: 'needs_start_stamp', remaining: estimated, elapsed: 0, running: true }
-    }
-
-    // No due time at all — idle
-    return { phase: 'idle', remaining: estimated, elapsed: 0, running: false }
-  }, [])
-
-  useEffect(() => {
+  const timers = useMemo(() => {
     const now = new Date()
-    const all = [...activeDaily, ...activeWeekly, ...activeCustom]
-    const next = { ...timersRef.current }
-
-    all.forEach((t) => {
-      const existing = next[t.id]
-      // Re-init if task's persisted state changed, or no timer entry exists
-      const existingStarted = existing?.startedAtStamp
-      const taskStarted = t.active_started_at
-      const shiftChanged = existing?.shiftStamp !== `${t.shift_minutes || 0}|${t.shift_date || ''}`
-
-      if (!existing || existingStarted !== taskStarted || shiftChanged) {
-        const computed = computeInitialTimer(t, now)
-        if (computed.phase === 'needs_start_stamp') {
-          // Stamp active_started_at, then it'll be 'active' on next pass
-          const stamp = new Date().toISOString()
-          supabase.from('tasks').update({ active_started_at: stamp }).eq('id', t.id).eq('user_id', user.id)
-            .then(() => {
-              setTasks((prev) => prev.map((x) => x.id === t.id ? { ...x, active_started_at: stamp } : x))
-            })
-          next[t.id] = {
-            phase: 'active', remaining: computed.remaining, elapsed: 0, running: true,
-            startedAtStamp: stamp,
-            shiftStamp: `${t.shift_minutes || 0}|${t.shift_date || ''}`,
-          }
-        } else if (computed.phase === 'expired') {
-          // Expired while away
-          if (t.category === 'daily') {
-            markTaskStatus(t.id, 'missed')
-          } else {
-            supabase.from('tasks').update({ active_started_at: null }).eq('id', t.id).eq('user_id', user.id)
-            next[t.id] = {
-              phase: 'idle', remaining: 0, elapsed: computed.elapsed || 0, running: false,
-              startedAtStamp: null,
-              shiftStamp: `${t.shift_minutes || 0}|${t.shift_date || ''}`,
-            }
-          }
-        } else {
-          next[t.id] = {
-            phase: computed.phase,
-            remaining: computed.remaining,
-            elapsed: computed.elapsed || 0,
-            running: computed.running,
-            startedAtStamp: taskStarted || null,
-            shiftStamp: `${t.shift_minutes || 0}|${t.shift_date || ''}`,
-          }
-        }
-      }
-    })
-
-    // Drop timers for tasks no longer active
-    const activeIds = new Set(all.map((t) => t.id))
-    Object.keys(next).forEach((id) => { if (!activeIds.has(id)) delete next[id] })
-
-    timersRef.current = next
-    setTimers(next)
-  }, [activeDaily, activeWeekly, activeCustom, computeInitialTimer, markTaskStatus, supabase, user])
+    const map = {}
+    allActive.forEach((t) => { map[t.id] = computeTimerState(t, now) })
+    return map
+    // tick is intentionally the trigger
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allActive, tick])
 
   // ============================================================
-  //  TIMER TICK — every second, only advances running timers
-  // ============================================================
-  useEffect(() => {
-    const id = setInterval(() => {
-      const now = new Date()
-      const nowMin = now.getHours() * 60 + now.getMinutes()
-      const all = [...activeDaily, ...activeWeekly, ...activeCustom]
-      const next = { ...timersRef.current }
-      let changed = false
-
-      all.forEach((t) => {
-        const entry = next[t.id]
-        if (!entry || !entry.running) return
-        const estimated = (t.estimated_minutes || 25) * 60
-
-        if (entry.phase === 'countdown') {
-          // Countdown uses wall clock — recompute instead of decrement
-          const today = toDayKey(now)
-          const shift = t.shift_date === today ? (t.shift_minutes || 0) : 0
-          let dueMin = null
-          if (t.time) {
-            const [h, m] = t.time.split(':').map(Number)
-            if (Number.isFinite(h) && Number.isFinite(m)) dueMin = h * 60 + m
-          }
-          const shiftedDue = dueMin != null ? dueMin + shift : null
-          if (shiftedDue != null && nowMin < shiftedDue) {
-            const rem = (shiftedDue - nowMin) * 60
-            if (rem !== entry.remaining) { next[t.id] = { ...entry, remaining: rem }; changed = true }
-          } else if (shiftedDue != null) {
-            // Transition to active — stamp
-            const stamp = new Date().toISOString()
-            supabase.from('tasks').update({ active_started_at: stamp }).eq('id', t.id).eq('user_id', user.id)
-              .then(() => {
-                setTasks((prev) => prev.map((x) => x.id === t.id ? { ...x, active_started_at: stamp } : x))
-              })
-            next[t.id] = {
-              ...entry,
-              phase: 'active', remaining: estimated, elapsed: 0,
-              startedAtStamp: stamp,
-            }
-            changed = true
-          }
-        } else if (entry.phase === 'active') {
-          // Active uses wall clock too — recompute from startedAtStamp
-          if (entry.startedAtStamp) {
-            const startedAt = new Date(entry.startedAtStamp).getTime()
-            const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
-            const remaining = Math.max(0, estimated - elapsedSec)
-            if (remaining <= 0) {
-              if (t.category === 'daily') {
-                markTaskStatus(t.id, 'missed')
-                delete next[t.id]
-              } else {
-                supabase.from('tasks').update({ active_started_at: null }).eq('id', t.id).eq('user_id', user.id)
-                next[t.id] = { ...entry, phase: 'idle', remaining: 0, elapsed: estimated, running: false, startedAtStamp: null }
-              }
-            } else if (remaining !== entry.remaining) {
-              next[t.id] = { ...entry, remaining, elapsed: elapsedSec }
-            }
-            changed = true
-          } else {
-            // No stamp — decrement as fallback
-            const rem = entry.remaining - 1
-            if (rem <= 0) {
-              if (t.category === 'daily') { markTaskStatus(t.id, 'missed'); delete next[t.id] }
-              else { next[t.id] = { ...entry, phase: 'idle', remaining: 0, running: false } }
-            } else {
-              next[t.id] = { ...entry, remaining: rem, elapsed: (entry.elapsed || 0) + 1 }
-            }
-            changed = true
-          }
-        }
-      })
-
-      if (changed) {
-        timersRef.current = next
-        setTimers(next)
-      }
-    }, 1000)
-    return () => clearInterval(id)
-  }, [activeDaily, activeWeekly, activeCustom, markTaskStatus, supabase, user])
-
-  // ============================================================
-  //  RESUME HANDLER — recompute on visibility return
-  // ============================================================
-  useEffect(() => {
-    const onVis = () => {
-      if (document.hidden) return
-      const now = new Date()
-      const all = [...activeDaily, ...activeWeekly, ...activeCustom]
-      const next = { ...timersRef.current }
-
-      all.forEach((t) => {
-        const entry = next[t.id]
-        if (!entry) return
-        const estimated = (t.estimated_minutes || 25) * 60
-
-        if (entry.phase === 'active' && entry.startedAtStamp) {
-          const startedAt = new Date(entry.startedAtStamp).getTime()
-          const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
-          const remaining = Math.max(0, estimated - elapsedSec)
-          if (remaining <= 0) {
-            if (t.category === 'daily') { markTaskStatus(t.id, 'missed'); delete next[t.id] }
-            else { next[t.id] = { ...entry, phase: 'idle', remaining: 0, elapsed: estimated, running: false } }
-          } else {
-            next[t.id] = { ...entry, remaining, elapsed: elapsedSec }
-          }
-        }
-      })
-
-      timersRef.current = next
-      setTimers(next)
-      fetchTasks()
-    }
-    document.addEventListener('visibilitychange', onVis)
-    return () => document.removeEventListener('visibilitychange', onVis)
-  }, [activeDaily, activeWeekly, activeCustom, markTaskStatus, fetchTasks])
-
-  // ============================================================
-  //  SHIFT — writes to DB, updates timer immediately
+  //  SHIFT — writes to DB, timer recomputes from wall clock
   // ============================================================
   const shiftTask = useCallback(async (taskId, minutes) => {
     const t = tasks.find((x) => x.id === taskId)
@@ -896,24 +775,15 @@ export default function TasksTab({ user, supabase, showToast, addToTrash }) {
     setTasks((prev) => prev.map((x) => x.id === taskId
       ? { ...x, shift_minutes: newShift, shift_date: today }
       : x))
-
-    updateTimer(taskId, {
-      remaining: (timersRef.current[taskId]?.remaining || 0) + minutes * 60,
-    })
     toast(`Shifted +${minutes}m`, 'info')
-  }, [tasks, supabase, user, updateTimer, toast])
+  }, [tasks, supabase, user, toast])
 
   const startActiveTimer = useCallback(async (taskId) => {
-    const entry = timersRef.current[taskId]
-    if (!entry || !supabase || !user) return
+    if (!supabase || !user) return
     const stamp = new Date().toISOString()
     await supabase.from('tasks').update({ active_started_at: stamp }).eq('id', taskId).eq('user_id', user.id)
     setTasks((prev) => prev.map((x) => x.id === taskId ? { ...x, active_started_at: stamp } : x))
-    updateTimer(taskId, {
-      phase: 'active', running: true, remaining: entry.remaining,
-      startedAtStamp: stamp,
-    })
-  }, [supabase, user, updateTimer])
+  }, [supabase, user])
 
   // ============================================================
   //  DERIVED ANALYTICS
